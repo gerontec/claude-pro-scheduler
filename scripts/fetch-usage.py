@@ -110,5 +110,26 @@ def run():
     print(f'[{datetime.now():%H:%M:%S}] ✓  Woche {parsed.get("usage_pct","?")}%  '
           f'Session {parsed.get("session_pct","?")}%  → {USAGE_FILE}', flush=True)
 
+    # ── Automatischer Compact + Cache-Sicherung bei hohem Session-Limit ──
+    import subprocess
+    session_pct = parsed.get('session_pct', 0)
+
+    if session_pct >= 80:
+        print(f'[{datetime.now():%H:%M:%S}] ⚡ Session {session_pct}% – starte /compact Sicherung', flush=True)
+        subprocess.Popen(
+            ['python3', '/home/gh/compact-cache.py'],
+            stdout=open('/tmp/compact-cache.log', 'a'),
+            stderr=subprocess.STDOUT
+        )
+
+    if session_pct >= 95:
+        print(f'[{datetime.now():%H:%M:%S}] ⚠  Session {session_pct}% – Notfall cache-saver', flush=True)
+        subprocess.Popen(
+            ['python3', '/home/gh/cache-saver.py',
+             '--emergency', '--trigger', f'fetch-usage-session-{session_pct}pct'],
+            stdout=open('/tmp/cache-saver.log', 'a'),
+            stderr=subprocess.STDOUT
+        )
+
 if __name__ == '__main__':
     run()

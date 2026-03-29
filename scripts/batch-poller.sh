@@ -17,19 +17,33 @@ touch "$LOCK"
 
 # ── Fälligen Job holen ─────────────────────────────────────
 JOB=$($DB -e "
-    SELECT id, model, prompt
+    SELECT id, model, resume_session, prompt
     FROM claude_pro_batch
     WHERE status='queued'
     ORDER BY targetdate ASC, created_at ASC LIMIT 1;" 2>/dev/null)
 
 [ -z "$JOB" ] && exit 0
 
-JOB_ID=$(echo "$JOB" | awk '{print $1}')
-MODEL=$(echo  "$JOB" | awk '{print $2}')
-PROMPT=$(echo "$JOB" | cut -f3-)
+JOB_ID=$(echo         "$JOB" | awk '{print $1}')
+MODEL=$(echo          "$JOB" | awk '{print $2}')
+RESUME_SESSION=$(echo "$JOB" | awk '{print $3}')
+PROMPT=$(echo         "$JOB" | cut -f4-)
 
 # ── Als "running" markieren ────────────────────────────────
 $DB -e "UPDATE claude_pro_batch SET status='running', started_at=NOW() WHERE id=$JOB_ID;" 2>/dev/null
+
+# ── Session-Cache voranstellen wenn gewünscht ──────────────
+if [ "$RESUME_SESSION" = "1" ]; then
+    CACHE_CTX=$($DB -e "
+        SELECT JSON_UNQUOTE(JSON_EXTRACT(context_json, '$.summary'))
+        FROM claude_context_cache
+        WHERE scope='session-compact'
+        LIMIT 1;" 2>/dev/null)
+    if [ -n "$CACHE_CTX" ] && [ "$CACHE_CTX" != "NULL" ]; then
+        PROMPT="$(printf '%s\n\n---\nAufgabe:\n%s' "$CACHE_CTX" "$PROMPT")"
+        echo "[$(date '+%H:%M:%S')] Session-Cache geladen ($(echo "$CACHE_CTX" | wc -c) Bytes)" >&2
+    fi
+fi
 
 # ── Wochentracking laden ───────────────────────────────────
 _week_start() {

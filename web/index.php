@@ -7,12 +7,13 @@ $msg = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['submit_job'])) {
-        $targetdate = $_POST['targetdate'] ?: date('Y-m-d');
-        $model      = in_array($_POST['model'], ['haiku','sonnet','opus']) ? $_POST['model'] : 'haiku';
-        $prompt     = trim($_POST['prompt']);
+        $targetdate     = $_POST['targetdate'] ?: date('Y-m-d');
+        $model          = in_array($_POST['model'], ['haiku','sonnet','opus']) ? $_POST['model'] : 'haiku';
+        $prompt         = trim($_POST['prompt']);
+        $resume_session = isset($_POST['resume_session']) ? 1 : 0;
         if ($prompt) {
-            $stmt = $pdo->prepare("INSERT INTO claude_pro_batch (targetdate, model, prompt) VALUES (?,?,?)");
-            $stmt->execute([$targetdate, $model, $prompt]);
+            $stmt = $pdo->prepare("INSERT INTO claude_pro_batch (targetdate, model, resume_session, prompt) VALUES (?,?,?,?)");
+            $stmt->execute([$targetdate, $model, $resume_session, $prompt]);
             $id = $pdo->lastInsertId();
             header("Location: ?msg=ok&job=$id&model=$model&date=$targetdate");
         } else {
@@ -106,12 +107,49 @@ $totals = $pdo->query("
 $usageFile = '/home/gh/.claude_weekly_usage.json';
 $usage = file_exists($usageFile) ? json_decode(file_get_contents($usageFile), true) : [];
 $weekStart  = $usage['week_start']      ?? '–';
-$weekReset  = $usage['week_reset']      ?? '–';
+$weekReset  = $usage['week_reset_raw']  ?? ($usage['week_reset'] ?? '–');
 $usagePct   = $usage['usage_pct']       ?? null;
 $sessionPct = $usage['session_pct']     ?? null;
 $pctSnap    = $usage['pct_snapshot_at'] ?? null;
+$lastRun    = $usage['last_run']        ?? null;
+$jsonInTok  = $usage['input_tokens']    ?? null;
+$jsonOutTok = $usage['output_tokens']   ?? null;
+$jsonCachTok= $usage['cache_tokens']    ?? null;
+$jsonCost   = $usage['cost_usd']        ?? null;
+$jsonTasks  = $usage['tasks']           ?? null;
+
+// ── Nächster Reset: Freitag 08:00 Europe/Berlin ────────────
+$tz        = new DateTimeZone('Europe/Berlin');
+$now       = new DateTime('now', $tz);
+$resetDay  = clone $now;
+$resetDay->modify('friday this week');
+$resetDay->setTime(8, 0, 0);
+if ($resetDay <= $now) {                        // Freitag schon vorbei → nächste Woche
+    $resetDay->modify('+7 days');
+}
+$resetLabel  = $resetDay->format('D d.m. H:i');
+$secsLeft    = $resetDay->getTimestamp() - $now->getTimestamp();
+$daysLeft    = floor($secsLeft / 86400);
+$hoursLeft   = floor(($secsLeft % 86400) / 3600);
+$minsLeft    = floor(($secsLeft % 3600) / 60);
+$restCountdown = ($daysLeft > 0 ? "{$daysLeft}T " : '') . "{$hoursLeft}h {$minsLeft}m";
+$restPct     = ($usagePct !== null) ? max(0, 100 - $usagePct) : null;
 
 $hasActive = (bool)array_filter($jobs, fn($j) => in_array($j['status'], ['queued','running']));
+
+// ── Session-Compact Cache vorhanden? ──────────────────────────────────
+$compact = $pdo->query("
+    SELECT updated_at FROM claude_context_cache
+    WHERE scope='session-compact' LIMIT 1
+")->fetch(PDO::FETCH_ASSOC);
+$hasCompact  = (bool)$compact;
+$compactAge  = '';
+if ($compact) {
+    $secs = time() - strtotime($compact['updated_at']);
+    $compactAge = $secs < 3600
+        ? floor($secs/60) . 'min'
+        : floor($secs/3600) . 'h';
+}
 
 // ── Hilfsfunktionen ────────────────────────────────────────
 function modelBadge($m) {
@@ -172,7 +210,12 @@ body { background:#0d1117; }
         <span class="navbar-brand">
             <i class="bi bi-robot me-2 text-primary"></i>Claude Pro Batch
         </span>
-        <small class="text-muted d-none d-sm-block">Reset: <?= htmlspecialchars($weekReset) ?></small>
+        <div class="d-flex align-items-center gap-2">
+            <small class="text-muted d-none d-sm-block">Reset: <?= htmlspecialchars($weekReset) ?></small>
+            <a href="view_cache.php" class="btn btn-sm btn-outline-secondary">
+                <i class="bi bi-database me-1"></i>Cache
+            </a>
+        </div>
     </div>
 </nav>
 
@@ -204,7 +247,21 @@ body { background:#0d1117; }
                         <option value="opus">🟣 Opus — Maximum (~19×)</option>
                     </select>
                 </div>
-                <div class="col-12 col-md-6">
+                <div class="col-12 col-sm-auto d-flex align-items-end pb-1">
+                    <div class="form-check form-switch mb-0">
+                        <input class="form-check-input" type="checkbox" role="switch"
+                               name="resume_session" id="resumeSwitch" value="1"
+                               <?= $hasCompact ? 'checked' : '' ?>>
+                        <label class="form-check-label small" for="resumeSwitch">
+                            <i class="bi bi-database-check me-1 text-info"></i>
+                            Session-Cache laden
+                            <?php if ($compactAge): ?>
+                            <span class="text-muted">(<?= $compactAge ?>)</span>
+                            <?php endif; ?>
+                        </label>
+                    </div>
+                </div>
+                <div class="col-12 col-md">
                     <label class="form-label small text-muted text-uppercase">Auftragstext</label>
                     <textarea class="form-control" name="prompt" rows="3"
                               placeholder="Schreibe eine Python-Funktion die ..."></textarea>
@@ -217,6 +274,119 @@ body { background:#0d1117; }
                 <small class="text-muted">Start: sofort &nbsp;|&nbsp; Zieldatum = Deadline (nächste Deadline zuerst)</small>
             </div>
         </form>
+    </div>
+</div>
+
+<!-- ── Wochenverbrauch (Usage) ── -->
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-1">
+        <span><i class="bi bi-speedometer2 me-1"></i>Claude Pro Wochenverbrauch</span>
+        <span class="text-muted small">
+            <?php if ($pctSnap): ?>
+                <i class="bi bi-clock me-1"></i>Stand: <?= htmlspecialchars($pctSnap) ?>
+            <?php elseif ($lastRun): ?>
+                <i class="bi bi-clock me-1"></i>Letzter Lauf: <?= htmlspecialchars($lastRun) ?>
+            <?php endif; ?>
+        </span>
+    </div>
+    <div class="card-body">
+
+        <!-- ── Countdown + Restkapazität ── -->
+        <div class="row g-2 mb-3">
+            <div class="col-6 col-sm-3">
+                <div class="stat-card text-center">
+                    <div class="stat-lbl">Reset in</div>
+                    <div class="stat-val <?= $hoursLeft < 6 ? 'text-danger' : ($hoursLeft < 24 ? 'text-warning' : 'text-info') ?>"
+                         style="font-size:1.2rem"><?= $restCountdown ?></div>
+                    <div class="stat-sub">Fr <?= $resetLabel ?></div>
+                </div>
+            </div>
+            <div class="col-6 col-sm-3">
+                <div class="stat-card text-center">
+                    <div class="stat-lbl">Noch verfügbar</div>
+                    <?php if ($restPct !== null): ?>
+                    <div class="stat-val <?= $restPct <= 10 ? 'text-danger' : ($restPct <= 30 ? 'text-warning' : 'text-success') ?>"><?= $restPct ?>%</div>
+                    <div class="stat-sub"><?= $usagePct ?>% verbraucht</div>
+                    <?php else: ?>
+                    <div class="stat-val text-muted" style="font-size:1rem">–</div>
+                    <div class="stat-sub">fetch-usage ausstehend</div>
+                    <?php endif; ?>
+                </div>
+            </div>
+            <div class="col-6 col-sm-3">
+                <div class="stat-card text-center">
+                    <div class="stat-lbl">Session</div>
+                    <?php if ($sessionPct !== null): ?>
+                    <div class="stat-val <?= $sessionPct >= 90 ? 'text-danger' : ($sessionPct >= 70 ? 'text-warning' : 'text-info') ?>"><?= $sessionPct ?>%</div>
+                    <div class="stat-sub"><?= 100 - $sessionPct ?>% frei</div>
+                    <?php else: ?>
+                    <div class="stat-val text-muted" style="font-size:1rem">–</div>
+                    <div class="stat-sub">noch kein Parse</div>
+                    <?php endif; ?>
+                </div>
+            </div>
+            <div class="col-6 col-sm-3">
+                <div class="stat-card text-center">
+                    <div class="stat-lbl">Periode ab</div>
+                    <div class="stat-val text-muted" style="font-size:.9rem;line-height:1.3">
+                        <?= htmlspecialchars($weekStart) ?>
+                    </div>
+                    <div class="stat-sub"><?= $jsonTasks !== null ? $jsonTasks.' Tasks' : '' ?></div>
+                </div>
+            </div>
+        </div>
+
+        <?php if ($usagePct !== null): ?>
+        <!-- ── Fortschrittsbalken ── -->
+        <div class="mb-1 d-flex justify-content-between"><small class="text-muted">Wochenlimit</small><strong class="<?= $usagePct >= 90 ? 'text-danger' : ($usagePct >= 70 ? 'text-warning' : 'text-success') ?>"><?= $usagePct ?>% verbraucht</strong></div>
+        <div class="progress mb-3" style="height:20px;background:#21262d">
+            <div class="progress-bar <?= $usagePct >= 90 ? 'bg-danger' : ($usagePct >= 70 ? 'bg-warning' : 'bg-success') ?>"
+                 style="width:<?= min($usagePct,100) ?>%;font-size:.75rem;line-height:20px">
+                <?php if ($usagePct > 8): ?><?= $usagePct ?>%<?php endif; ?>
+            </div>
+        </div>
+        <?php else: ?>
+        <div class="alert alert-secondary py-2 small mb-3">
+            <i class="bi bi-info-circle me-1"></i>
+            %-Werte ausstehend — <code>fetch-usage.py</code> läuft alle 30 min (Cron).
+        </div>
+        <?php endif; ?>
+
+        <!-- ── Token-Statistiken aus usage-JSON ── -->
+        <?php if ($jsonInTok !== null): ?>
+        <div class="row g-2 mb-2">
+            <div class="col-6 col-sm-3">
+                <div class="stat-card">
+                    <div class="stat-lbl">Gesamtkosten</div>
+                    <div class="stat-val text-warning">$<?= number_format($jsonCost,4) ?></div>
+                    <div class="stat-sub"><?= $jsonTasks ?> Tasks gesamt</div>
+                </div>
+            </div>
+            <div class="col-6 col-sm-3">
+                <div class="stat-card">
+                    <div class="stat-lbl">Input Tokens</div>
+                    <div class="stat-val text-primary"><?= number_format($jsonInTok) ?></div>
+                    <div class="stat-sub">direkte Eingabe</div>
+                </div>
+            </div>
+            <div class="col-6 col-sm-3">
+                <div class="stat-card">
+                    <div class="stat-lbl">Output Tokens</div>
+                    <div class="stat-val text-success"><?= number_format($jsonOutTok) ?></div>
+                    <div class="stat-sub">generiert</div>
+                </div>
+            </div>
+            <div class="col-6 col-sm-3">
+                <div class="stat-card">
+                    <div class="stat-lbl">Cache Tokens</div>
+                    <div class="stat-val" style="color:#bc8cff"><?= number_format($jsonCachTok) ?></div>
+                    <div class="stat-sub">wiederverwendet</div>
+                </div>
+            </div>
+        </div>
+        <p class="text-muted small mb-0"><i class="bi bi-info-circle me-1"></i>Kumuliert aus <code>~/.claude_weekly_usage.json</code> — alle Jobs dieser Woche.</p>
+        <?php endif; ?>
+
     </div>
 </div>
 
@@ -319,78 +489,6 @@ body { background:#0d1117; }
     </div>
 </div>
 
-
-<!-- ── Wochenverbrauch ── -->
-<div class="card mb-3">
-    <div class="card-header d-flex justify-content-between">
-        <span><i class="bi bi-bar-chart me-1"></i>Wochenverbrauch (Claude Pro Limit)</span>
-        <?php if ($pctSnap): ?>
-        <small class="text-muted">Stand: <?= htmlspecialchars($pctSnap) ?></small>
-        <?php endif; ?>
-    </div>
-    <div class="card-body">
-
-        <?php if ($usagePct !== null): ?>
-        <!-- Wochenlimit Fortschrittsbalken -->
-        <div class="mb-3">
-            <div class="d-flex justify-content-between mb-1">
-                <small class="text-muted">Woche gesamt (alle Modelle)</small>
-                <strong class="<?= $usagePct >= 80 ? 'text-danger' : ($usagePct >= 60 ? 'text-warning' : 'text-success') ?>"><?= $usagePct ?>%</strong>
-            </div>
-            <div class="progress" style="height:18px;background:#21262d">
-                <div class="progress-bar <?= $usagePct >= 80 ? 'bg-danger' : ($usagePct >= 60 ? 'bg-warning' : 'bg-success') ?>"
-                     style="width:<?= $usagePct ?>%">
-                </div>
-            </div>
-            <?php if ($sessionPct !== null): ?>
-            <div class="d-flex justify-content-between mt-2 mb-1">
-                <small class="text-muted">Aktuelle Session</small>
-                <strong class="text-info"><?= $sessionPct ?>%</strong>
-            </div>
-            <div class="progress" style="height:10px;background:#21262d">
-                <div class="progress-bar bg-info" style="width:<?= $sessionPct ?>%"></div>
-            </div>
-            <?php endif; ?>
-            <div class="mt-2 d-flex justify-content-between">
-                <small class="text-muted">Periode ab: <?= htmlspecialchars($weekStart) ?></small>
-                <small class="text-muted">Reset: <strong class="text-light"><?= htmlspecialchars($weekReset) ?></strong></small>
-            </div>
-        </div>
-        <hr style="border-color:#30363d">
-        <?php endif; ?>
-
-        <div class="row g-2">
-            <div class="col-6 col-md-3">
-                <div class="stat-card">
-                    <div class="stat-lbl">Batch-Kosten</div>
-                    <div class="stat-val text-warning">$<?= number_format($weekCost['cost'],4) ?></div>
-                    <div class="stat-sub"><?= $weekCost['tasks'] ?> Batch-Tasks</div>
-                </div>
-            </div>
-            <div class="col-6 col-md-3">
-                <div class="stat-card">
-                    <div class="stat-lbl">Input Tokens</div>
-                    <div class="stat-val text-primary"><?= number_format($weekCost['i_tok']) ?></div>
-                    <div class="stat-sub">direkte Eingabe</div>
-                </div>
-            </div>
-            <div class="col-6 col-md-3">
-                <div class="stat-card">
-                    <div class="stat-lbl">Output Tokens</div>
-                    <div class="stat-val text-success"><?= number_format($weekCost['o_tok']) ?></div>
-                    <div class="stat-sub">generiert</div>
-                </div>
-            </div>
-            <div class="col-6 col-md-3">
-                <div class="stat-card">
-                    <div class="stat-lbl">Cache Tokens</div>
-                    <div class="stat-val" style="color:#bc8cff"><?= number_format($weekCost['c_tok']) ?></div>
-                    <div class="stat-sub">wiederverwendet</div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
 
 <!-- ── Statistik Report ── -->
 <div class="card mb-3">
