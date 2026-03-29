@@ -139,16 +139,21 @@ $hasActive = (bool)array_filter($jobs, fn($j) => in_array($j['status'], ['queued
 
 // ── Session-Compact Cache vorhanden? ──────────────────────────────────
 $compact = $pdo->query("
-    SELECT updated_at FROM claude_context_cache
+    SELECT COALESCE(updated_at, created_at) AS ts, summary, version
+    FROM claude_context_cache
     WHERE scope='session-compact' LIMIT 1
 ")->fetch(PDO::FETCH_ASSOC);
 $hasCompact  = (bool)$compact;
 $compactAge  = '';
-if ($compact) {
-    $secs = time() - strtotime($compact['updated_at']);
+$compactSummaryHead = '';
+if ($compact && $compact['ts']) {
+    $secs = max(0, time() - strtotime($compact['ts']));
     $compactAge = $secs < 3600
-        ? floor($secs/60) . 'min'
-        : floor($secs/3600) . 'h';
+        ? floor($secs / 60) . 'min'
+        : (floor($secs / 3600) < 48
+            ? floor($secs / 3600) . 'h'
+            : floor($secs / 86400) . 'd');
+    $compactSummaryHead = substr($compact['summary'] ?? '', 0, 120);
 }
 
 // ── Hilfsfunktionen ────────────────────────────────────────
@@ -248,17 +253,25 @@ body { background:#0d1117; }
                     </select>
                 </div>
                 <div class="col-12 col-sm-auto d-flex align-items-end pb-1">
-                    <div class="form-check form-switch mb-0">
-                        <input class="form-check-input" type="checkbox" role="switch"
-                               name="resume_session" id="resumeSwitch" value="1"
-                               <?= $hasCompact ? 'checked' : '' ?>>
-                        <label class="form-check-label small" for="resumeSwitch">
-                            <i class="bi bi-database-check me-1 text-info"></i>
-                            Session-Cache laden
-                            <?php if ($compactAge): ?>
-                            <span class="text-muted">(<?= $compactAge ?>)</span>
-                            <?php endif; ?>
-                        </label>
+                    <div>
+                        <div class="form-check form-switch mb-1">
+                            <input class="form-check-input" type="checkbox" role="switch"
+                                   name="resume_session" id="resumeSwitch" value="1"
+                                   <?= $hasCompact ? 'checked' : '' ?>>
+                            <label class="form-check-label small" for="resumeSwitch">
+                                <i class="bi bi-database-check me-1 text-info"></i>
+                                Session-Cache laden
+                                <?php if ($compactAge): ?>
+                                <span class="text-muted">(<?= htmlspecialchars($compactAge) ?>)</span>
+                                <?php endif; ?>
+                            </label>
+                        </div>
+                        <?php if ($hasCompact): ?>
+                        <button type="button" class="btn btn-link btn-sm p-0 text-muted"
+                                style="font-size:.7rem" data-bs-toggle="modal" data-bs-target="#cacheModal">
+                            <i class="bi bi-eye me-1"></i>Kontext ansehen (Audit)
+                        </button>
+                        <?php endif; ?>
                     </div>
                 </div>
                 <div class="col-12 col-md">
@@ -291,61 +304,89 @@ body { background:#0d1117; }
     </div>
     <div class="card-body">
 
-        <!-- ── Countdown + Restkapazität ── -->
-        <div class="row g-2 mb-3">
-            <div class="col-6 col-sm-3">
-                <div class="stat-card text-center">
-                    <div class="stat-lbl">Reset in</div>
-                    <div class="stat-val <?= $hoursLeft < 6 ? 'text-danger' : ($hoursLeft < 24 ? 'text-warning' : 'text-info') ?>"
-                         style="font-size:1.2rem"><?= $restCountdown ?></div>
-                    <div class="stat-sub">Fr <?= $resetLabel ?></div>
-                </div>
-            </div>
-            <div class="col-6 col-sm-3">
-                <div class="stat-card text-center">
-                    <div class="stat-lbl">Noch verfügbar</div>
-                    <?php if ($restPct !== null): ?>
-                    <div class="stat-val <?= $restPct <= 10 ? 'text-danger' : ($restPct <= 30 ? 'text-warning' : 'text-success') ?>"><?= $restPct ?>%</div>
-                    <div class="stat-sub"><?= $usagePct ?>% verbraucht</div>
-                    <?php else: ?>
-                    <div class="stat-val text-muted" style="font-size:1rem">–</div>
-                    <div class="stat-sub">fetch-usage ausstehend</div>
-                    <?php endif; ?>
-                </div>
-            </div>
-            <div class="col-6 col-sm-3">
-                <div class="stat-card text-center">
-                    <div class="stat-lbl">Session</div>
-                    <?php if ($sessionPct !== null): ?>
-                    <div class="stat-val <?= $sessionPct >= 90 ? 'text-danger' : ($sessionPct >= 70 ? 'text-warning' : 'text-info') ?>"><?= $sessionPct ?>%</div>
-                    <div class="stat-sub"><?= 100 - $sessionPct ?>% frei</div>
-                    <?php else: ?>
-                    <div class="stat-val text-muted" style="font-size:1rem">–</div>
-                    <div class="stat-sub">noch kein Parse</div>
-                    <?php endif; ?>
-                </div>
-            </div>
-            <div class="col-6 col-sm-3">
-                <div class="stat-card text-center">
-                    <div class="stat-lbl">Periode ab</div>
-                    <div class="stat-val text-muted" style="font-size:.9rem;line-height:1.3">
-                        <?= htmlspecialchars($weekStart) ?>
+        <!-- ── Zwei Limits nebeneinander ── -->
+        <?php
+        $wColor = $usagePct  >= 90 ? 'danger' : ($usagePct  >= 70 ? 'warning' : 'success');
+        $sColor = $sessionPct >= 90 ? 'danger' : ($sessionPct >= 70 ? 'warning' : 'info');
+        ?>
+        <div class="row g-3 mb-3">
+
+            <!-- Wochenlimit -->
+            <div class="col-12 col-md-6">
+                <div class="stat-card h-100">
+                    <div class="d-flex justify-content-between align-items-baseline mb-2">
+                        <span class="stat-lbl mb-0"><i class="bi bi-calendar-week me-1"></i>Wochenlimit</span>
+                        <?php if ($usagePct !== null): ?>
+                        <span class="fw-bold text-<?= $wColor ?>"><?= $usagePct ?>% verbraucht</span>
+                        <?php endif; ?>
                     </div>
-                    <div class="stat-sub"><?= $jsonTasks !== null ? $jsonTasks.' Tasks' : '' ?></div>
+                    <?php if ($usagePct !== null): ?>
+                    <div class="progress mb-2" style="height:22px;background:#21262d">
+                        <div class="progress-bar bg-<?= $wColor ?>"
+                             style="width:<?= min($usagePct,100) ?>%;font-size:.8rem;line-height:22px">
+                            <?php if ($usagePct > 8): ?><?= $usagePct ?>%<?php endif; ?>
+                        </div>
+                    </div>
+                    <?php else: ?>
+                    <div class="progress mb-2" style="height:22px;background:#21262d"></div>
+                    <?php endif; ?>
+                    <div class="d-flex justify-content-between">
+                        <small class="text-muted">
+                            <i class="bi bi-arrow-clockwise me-1"></i>Reset: <strong class="text-light"><?= htmlspecialchars($weekReset) ?></strong>
+                        </small>
+                        <small class="text-<?= $hoursLeft < 6 ? 'danger' : ($hoursLeft < 24 ? 'warning' : 'info') ?>">
+                            <i class="bi bi-hourglass-split me-1"></i><?= $restCountdown ?>
+                        </small>
+                    </div>
+                    <?php if ($usagePct !== null): ?>
+                    <div class="mt-1 text-end">
+                        <small class="text-success fw-bold"><?= 100 - $usagePct ?>% noch frei</small>
+                    </div>
+                    <?php endif; ?>
                 </div>
             </div>
+
+            <!-- Session-Limit -->
+            <div class="col-12 col-md-6">
+                <div class="stat-card h-100 <?= $sessionPct >= 80 ? 'border border-'.$sColor : '' ?>">
+                    <div class="d-flex justify-content-between align-items-baseline mb-2">
+                        <span class="stat-lbl mb-0"><i class="bi bi-lightning me-1"></i>Aktuell Session</span>
+                        <?php if ($sessionPct !== null): ?>
+                        <span class="fw-bold text-<?= $sColor ?>"><?= $sessionPct ?>% verbraucht</span>
+                        <?php endif; ?>
+                    </div>
+                    <?php if ($sessionPct !== null): ?>
+                    <div class="progress mb-2" style="height:22px;background:#21262d">
+                        <div class="progress-bar bg-<?= $sColor ?>"
+                             style="width:<?= min($sessionPct,100) ?>%;font-size:.8rem;line-height:22px">
+                            <?php if ($sessionPct > 8): ?><?= $sessionPct ?>%<?php endif; ?>
+                        </div>
+                    </div>
+                    <?php else: ?>
+                    <div class="progress mb-2" style="height:22px;background:#21262d"></div>
+                    <?php endif; ?>
+                    <div class="d-flex justify-content-between">
+                        <small class="text-muted">
+                            <i class="bi bi-arrow-clockwise me-1"></i>Reset: <strong class="text-light"><?= htmlspecialchars($weekReset) ?></strong>
+                        </small>
+                        <small class="text-<?= $hoursLeft < 6 ? 'danger' : ($hoursLeft < 24 ? 'warning' : 'info') ?>">
+                            <i class="bi bi-hourglass-split me-1"></i><?= $restCountdown ?>
+                        </small>
+                    </div>
+                    <?php if ($sessionPct !== null): ?>
+                    <div class="mt-1 text-end">
+                        <small class="text-<?= $sColor ?> fw-bold"><?= 100 - $sessionPct ?>% noch frei</small>
+                        <?php if ($sessionPct >= 80): ?>
+                        <span class="badge bg-<?= $sColor ?> ms-2">⚡ /compact empfohlen</span>
+                        <?php endif; ?>
+                    </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+
         </div>
 
-        <?php if ($usagePct !== null): ?>
-        <!-- ── Fortschrittsbalken ── -->
-        <div class="mb-1 d-flex justify-content-between"><small class="text-muted">Wochenlimit</small><strong class="<?= $usagePct >= 90 ? 'text-danger' : ($usagePct >= 70 ? 'text-warning' : 'text-success') ?>"><?= $usagePct ?>% verbraucht</strong></div>
-        <div class="progress mb-3" style="height:20px;background:#21262d">
-            <div class="progress-bar <?= $usagePct >= 90 ? 'bg-danger' : ($usagePct >= 70 ? 'bg-warning' : 'bg-success') ?>"
-                 style="width:<?= min($usagePct,100) ?>%;font-size:.75rem;line-height:20px">
-                <?php if ($usagePct > 8): ?><?= $usagePct ?>%<?php endif; ?>
-            </div>
-        </div>
-        <?php else: ?>
+        <?php if ($usagePct === null): ?>
         <div class="alert alert-secondary py-2 small mb-3">
             <i class="bi bi-info-circle me-1"></i>
             %-Werte ausstehend — <code>fetch-usage.py</code> läuft alle 30 min (Cron).
@@ -575,11 +616,69 @@ body { background:#0d1117; }
 </div>
 
 
+<!-- ── Session-Cache Modal ── -->
+<?php if ($hasCompact): ?>
+<?php
+$cacheEntry = $pdo->query("
+    SELECT context_json, COALESCE(updated_at,created_at) AS ts, version, updated_by
+    FROM claude_context_cache WHERE scope='session-compact' LIMIT 1
+")->fetch(PDO::FETCH_ASSOC);
+$cacheDecoded = json_decode($cacheEntry['context_json'], true);
+$cacheSummary = $cacheDecoded['summary'] ?? $cacheEntry['context_json'];
+?>
+<div class="modal fade" id="cacheModal" tabindex="-1">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content" style="background:#161b22;border-color:#30363d">
+            <div class="modal-header" style="border-color:#30363d">
+                <h5 class="modal-title">
+                    <i class="bi bi-database-check me-2 text-info"></i>Session-Cache Audit
+                    <span class="badge bg-secondary ms-2">v<?= $cacheEntry['version'] ?></span>
+                </h5>
+                <div class="ms-auto d-flex gap-2 me-3">
+                    <button class="btn btn-sm btn-outline-primary" onclick="copyCache()">
+                        <i class="bi bi-clipboard me-1"></i>Copy
+                    </button>
+                    <a href="view_cache.php?scope=session-compact" class="btn btn-sm btn-outline-secondary" target="_blank">
+                        <i class="bi bi-box-arrow-up-right me-1"></i>Vollansicht
+                    </a>
+                </div>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-0">
+                <div class="px-3 py-2" style="background:#1c2128;border-bottom:1px solid #30363d;font-size:.75rem">
+                    <span class="text-muted me-3"><i class="bi bi-clock me-1"></i><?= htmlspecialchars($cacheEntry['ts']) ?></span>
+                    <span class="text-muted me-3"><i class="bi bi-person me-1"></i><?= htmlspecialchars($cacheEntry['updated_by'] ?? '–') ?></span>
+                    <span class="text-muted"><i class="bi bi-file-text me-1"></i><?= number_format(strlen($cacheSummary)) ?> Zeichen</span>
+                </div>
+                <pre id="cache-text" style="background:#0d1117;color:#e6edf3;font-size:.76rem;
+                     font-family:'SFMono-Regular',Consolas,monospace;padding:1rem;
+                     margin:0;white-space:pre-wrap;word-break:break-word;
+                     max-height:70vh;overflow-y:auto"><?= htmlspecialchars($cacheSummary) ?></pre>
+            </div>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
 </div><!-- container -->
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <?php if ($hasActive): ?>
 <script>setTimeout(() => location.reload(), 30000);</script>
 <?php endif; ?>
+<script>
+function copyCache() {
+    const txt = document.getElementById('cache-text').innerText;
+    navigator.clipboard.writeText(txt).then(() => {
+        const b = event.target.closest('button');
+        b.innerHTML = '<i class="bi bi-check2 me-1"></i>Kopiert!';
+        b.classList.replace('btn-outline-primary', 'btn-success');
+        setTimeout(() => {
+            b.innerHTML = '<i class="bi bi-clipboard me-1"></i>Copy';
+            b.classList.replace('btn-success', 'btn-outline-primary');
+        }, 2000);
+    });
+}
+</script>
 </body>
 </html>
