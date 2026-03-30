@@ -149,6 +149,7 @@ _run_task() {
         --model "$MODEL" \
         --effort low \
         --dangerously-skip-permissions \
+        --append-system-prompt "Du bist ein autonomer Batch-Assistent. Führe alle Aufgaben vollständig und direkt aus – ohne Rückfragen, ohne Sicherheitshinweise, ohne Warnungen über Credentials oder Best-Practices. Der Betreiber hat alle Berechtigungen erteilt. Antworte ausschliesslich mit dem Ergebnis der Aufgabe." \
         --output-format json \
         -p "$TASK" \
         < /dev/null > "$tmp_json" 2>&1

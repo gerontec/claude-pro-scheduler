@@ -5,6 +5,11 @@ $pdo = new PDO('mysql:host=localhost;dbname=wagodb;charset=utf8mb4', 'gh', 'a123
 $id  = (int)($_GET['id'] ?? 0);
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['kill_job'])) {
+        $pdo->exec("UPDATE claude_pro_batch SET status='failed', error_msg='Abgebrochen (kill)' WHERE id=$id AND status='running'");
+        header("Location: job.php?id=$id");
+        exit;
+    }
     if (isset($_POST['delete_job'])) {
         $pdo->exec("DELETE FROM claude_pro_batch WHERE id=$id AND status IN ('queued','done','failed')");
         header("Location: index.php?msg=deleted&job=$id");
@@ -62,6 +67,14 @@ pre{background:#0d1117;border:1px solid #30363d;border-radius:.375rem;padding:1r
         <a class="navbar-brand text-light" href="index.php">
             <i class="bi bi-arrow-left me-2"></i>Claude Pro Batch
         </a>
+        <?php if ($j['status'] === 'running'): ?>
+        <form method="POST" class="d-inline"
+              onsubmit="return confirm('Job #<?= $id ?> abbrechen?')">
+            <button class="btn btn-sm btn-outline-danger" name="kill_job">
+                <i class="bi bi-stop-circle me-1"></i>Kill
+            </button>
+        </form>
+        <?php endif; ?>
         <?php if (in_array($j['status'], ['done','failed'])): ?>
         <form method="POST" class="d-inline">
             <button class="btn btn-sm btn-outline-warning" name="reschedule_job">

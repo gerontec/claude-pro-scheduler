@@ -27,6 +27,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header("Location: ?msg=cancelled&job=$id");
         exit;
     }
+    if (isset($_POST['kill_job'])) {
+        $id = (int)$_POST['kill_job'];
+        $pdo->exec("UPDATE claude_pro_batch SET status='failed', error_msg='Abgebrochen (kill)' WHERE id=$id AND status='running'");
+        header("Location: ?msg=cancelled&job=$id");
+        exit;
+    }
     if (isset($_POST['delete_job'])) {
         $id = (int)$_POST['delete_job'];
         $pdo->exec("DELETE FROM claude_pro_batch WHERE id=$id AND status IN ('queued','done','failed')");
@@ -242,7 +248,7 @@ body { background:#0d1117; }
                 <div class="col-12 col-sm-5 col-md-3">
                     <label class="form-label small text-muted text-uppercase">Zieldatum</label>
                     <input type="date" class="form-control" name="targetdate"
-                           value="<?= date('Y-m-d') ?>" min="<?= date('Y-m-d') ?>">
+                           value="<?= date('Y-m-d', strtotime('+1 day')) ?>" min="<?= date('Y-m-d') ?>">
                 </div>
                 <div class="col-12 col-sm-7 col-md-3">
                     <label class="form-label small text-muted text-uppercase">Modell</label>
@@ -287,6 +293,112 @@ body { background:#0d1117; }
                 <small class="text-muted">Start: sofort &nbsp;|&nbsp; Zieldatum = Deadline (nächste Deadline zuerst)</small>
             </div>
         </form>
+    </div>
+</div>
+
+<!-- ── Job-Liste ── -->
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-list-task me-1"></i>Jobs (letzte 50)</span>
+        <?php if ($hasActive): ?>
+        <span class="text-info small"><i class="bi bi-arrow-repeat spinner me-1"></i>Auto-Refresh 30s</span>
+        <?php endif; ?>
+    </div>
+    <div class="card-body p-0">
+        <div class="table-responsive">
+        <table class="table table-hover mb-0">
+            <thead><tr>
+                <th>#</th>
+                <th>Datum</th>
+                <th>Modell</th>
+                <th>Status</th>
+                <th>Prompt</th>
+                <th class="hide-mobile">Tokens (in/out/cache)</th>
+                <th>Kosten</th>
+                <th class="hide-mobile">Dauer</th>
+                <th></th>
+            </tr></thead>
+            <tbody>
+            <?php foreach ($jobs as $j): ?>
+            <tr>
+                <td><a href="job.php?id=<?= $j['id'] ?>" class="text-muted">#<?= $j['id'] ?></a></td>
+                <td class="text-muted small"><?= $j['targetdate'] ?></td>
+                <td><?= modelBadge($j['model']) ?></td>
+                <td><?= statusBadge($j['status']) ?></td>
+                <td>
+                    <a href="job.php?id=<?= $j['id'] ?>" class="text-decoration-none">
+                    <span class="prompt-truncate text-muted small"
+                          title="<?= htmlspecialchars($j['prompt_short']) ?>">
+                        <?= htmlspecialchars($j['prompt_short']) ?>
+                    </span>
+                    </a>
+                </td>
+                <td class="hide-mobile small text-muted">
+                    <?php if ($j['input_tokens']): ?>
+                    <?= number_format($j['input_tokens']) ?> / <?= number_format($j['output_tokens']) ?> / <?= number_format($j['cache_tokens']) ?>
+                    <?php else: echo '–'; endif; ?>
+                </td>
+                <td>
+                    <?php if ($j['cost_usd']): ?>
+                    <strong class="text-warning">$<?= number_format($j['cost_usd'],4) ?></strong>
+                    <?php else: echo '<span class="text-muted">–</span>'; endif; ?>
+                </td>
+                <td class="hide-mobile text-muted small"><?= dur($j['started_at'],$j['finished_at']) ?></td>
+                <td>
+                    <?php if ($j['result']): ?>
+                    <button class="btn btn-sm btn-outline-secondary py-0"
+                            data-bs-toggle="collapse"
+                            data-bs-target="#res-<?= $j['id'] ?>">
+                        <i class="bi bi-eye"></i>
+                    </button>
+                    <?php elseif ($j['status'] === 'queued'): ?>
+                    <form method="POST" class="d-inline">
+                        <button class="btn btn-sm btn-outline-danger py-0" name="cancel_job" value="<?= $j['id'] ?>">
+                            <i class="bi bi-x"></i>
+                        </button>
+                    </form>
+                    <?php elseif ($j['status'] === 'running'): ?>
+                    <form method="POST" class="d-inline"
+                          onsubmit="return confirm('Job #<?= $j['id'] ?> abbrechen?')">
+                        <button class="btn btn-sm btn-outline-danger py-0" name="kill_job" value="<?= $j['id'] ?>">
+                            <i class="bi bi-stop-circle"></i>
+                        </button>
+                    </form>
+                    <?php elseif ($j['status'] === 'failed'): ?>
+                    <form method="POST" class="d-inline">
+                        <button class="btn btn-sm btn-outline-warning py-0"
+                                name="reschedule_job" value="<?= $j['id'] ?>">
+                            <i class="bi bi-arrow-clockwise"></i>
+                        </button>
+                    </form>
+                    <?php endif; ?>
+                    <?php if ($j['status'] !== 'running'): ?>
+                    <form method="POST" class="d-inline"
+                          onsubmit="return confirm('Job #<?= $j['id'] ?> löschen?')">
+                        <button class="btn btn-sm btn-outline-danger py-0 ms-1"
+                                name="delete_job" value="<?= $j['id'] ?>">
+                            <i class="bi bi-trash"></i>
+                        </button>
+                    </form>
+                    <?php endif; ?>
+                </td>
+            </tr>
+            <?php if ($j['result']): ?>
+            <tr class="collapse" id="res-<?= $j['id'] ?>">
+                <td colspan="9" class="p-2">
+                    <pre class="result-pre mb-0"><?= htmlspecialchars($j['result']) ?></pre>
+                </td>
+            </tr>
+            <?php endif; ?>
+            <?php endforeach; ?>
+            <?php if (empty($jobs)): ?>
+            <tr><td colspan="9" class="text-center py-4 text-muted">
+                <i class="bi bi-inbox fs-3 d-block mb-2"></i>Noch keine Jobs. Ersten Job oben einreihen.
+            </td></tr>
+            <?php endif; ?>
+            </tbody>
+        </table>
+        </div>
     </div>
 </div>
 
@@ -386,147 +498,17 @@ body { background:#0d1117; }
 
         </div>
 
-        <?php if ($usagePct === null): ?>
-        <div class="alert alert-secondary py-2 small mb-3">
-            <i class="bi bi-info-circle me-1"></i>
-            %-Werte ausstehend — <code>fetch-usage.py</code> läuft alle 30 min (Cron).
-        </div>
-        <?php endif; ?>
-
-        <!-- ── Token-Statistiken aus usage-JSON ── -->
-        <?php if ($jsonInTok !== null): ?>
-        <div class="row g-2 mb-2">
-            <div class="col-6 col-sm-3">
-                <div class="stat-card">
-                    <div class="stat-lbl">Gesamtkosten</div>
-                    <div class="stat-val text-warning">$<?= number_format($jsonCost,4) ?></div>
-                    <div class="stat-sub"><?= $jsonTasks ?> Tasks gesamt</div>
-                </div>
-            </div>
-            <div class="col-6 col-sm-3">
-                <div class="stat-card">
-                    <div class="stat-lbl">Input Tokens</div>
-                    <div class="stat-val text-primary"><?= number_format($jsonInTok) ?></div>
-                    <div class="stat-sub">direkte Eingabe</div>
-                </div>
-            </div>
-            <div class="col-6 col-sm-3">
-                <div class="stat-card">
-                    <div class="stat-lbl">Output Tokens</div>
-                    <div class="stat-val text-success"><?= number_format($jsonOutTok) ?></div>
-                    <div class="stat-sub">generiert</div>
-                </div>
-            </div>
-            <div class="col-6 col-sm-3">
-                <div class="stat-card">
-                    <div class="stat-lbl">Cache Tokens</div>
-                    <div class="stat-val" style="color:#bc8cff"><?= number_format($jsonCachTok) ?></div>
-                    <div class="stat-sub">wiederverwendet</div>
-                </div>
-            </div>
-        </div>
-        <p class="text-muted small mb-0"><i class="bi bi-info-circle me-1"></i>Kumuliert aus <code>~/.claude_weekly_usage.json</code> — alle Jobs dieser Woche.</p>
-        <?php endif; ?>
-
-    </div>
-</div>
-
-<!-- ── Job-Liste ── -->
-<div class="card">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-list-task me-1"></i>Jobs (letzte 50)</span>
-        <?php if ($hasActive): ?>
-        <span class="text-info small"><i class="bi bi-arrow-repeat spinner me-1"></i>Auto-Refresh 30s</span>
-        <?php endif; ?>
-    </div>
-    <div class="card-body p-0">
-        <div class="table-responsive">
-        <table class="table table-hover mb-0">
-            <thead><tr>
-                <th>#</th>
-                <th>Datum</th>
-                <th>Modell</th>
-                <th>Status</th>
-                <th>Prompt</th>
-                <th class="hide-mobile">Tokens (in/out/cache)</th>
-                <th>Kosten</th>
-                <th class="hide-mobile">Dauer</th>
-                <th></th>
-            </tr></thead>
-            <tbody>
-            <?php foreach ($jobs as $j): ?>
-            <tr>
-                <td><a href="job.php?id=<?= $j['id'] ?>" class="text-muted">#<?= $j['id'] ?></a></td>
-                <td class="text-muted small"><?= $j['targetdate'] ?></td>
-                <td><?= modelBadge($j['model']) ?></td>
-                <td><?= statusBadge($j['status']) ?></td>
-                <td>
-                    <a href="job.php?id=<?= $j['id'] ?>" class="text-decoration-none">
-                    <span class="prompt-truncate text-muted small"
-                          title="<?= htmlspecialchars($j['prompt_short']) ?>">
-                        <?= htmlspecialchars($j['prompt_short']) ?>
-                    </span>
-                    </a>
-                </td>
-                <td class="hide-mobile small text-muted">
-                    <?php if ($j['input_tokens']): ?>
-                    <?= number_format($j['input_tokens']) ?> / <?= number_format($j['output_tokens']) ?> / <?= number_format($j['cache_tokens']) ?>
-                    <?php else: echo '–'; endif; ?>
-                </td>
-                <td>
-                    <?php if ($j['cost_usd']): ?>
-                    <strong class="text-warning">$<?= number_format($j['cost_usd'],4) ?></strong>
-                    <?php else: echo '<span class="text-muted">–</span>'; endif; ?>
-                </td>
-                <td class="hide-mobile text-muted small"><?= dur($j['started_at'],$j['finished_at']) ?></td>
-                <td>
-                    <?php if ($j['result']): ?>
-                    <button class="btn btn-sm btn-outline-secondary py-0"
-                            data-bs-toggle="collapse"
-                            data-bs-target="#res-<?= $j['id'] ?>">
-                        <i class="bi bi-eye"></i>
-                    </button>
-                    <?php elseif ($j['status'] === 'queued'): ?>
-                    <form method="POST" class="d-inline">
-                        <button class="btn btn-sm btn-outline-danger py-0" name="cancel_job" value="<?= $j['id'] ?>">
-                            <i class="bi bi-x"></i>
-                        </button>
-                    </form>
-                    <?php elseif ($j['status'] === 'failed'): ?>
-                    <form method="POST" class="d-inline">
-                        <button class="btn btn-sm btn-outline-warning py-0"
-                                name="reschedule_job" value="<?= $j['id'] ?>">
-                            <i class="bi bi-arrow-clockwise"></i>
-                        </button>
-                    </form>
-                    <?php endif; ?>
-                    <?php if ($j['status'] !== 'running'): ?>
-                    <form method="POST" class="d-inline"
-                          onsubmit="return confirm('Job #<?= $j['id'] ?> löschen?')">
-                        <button class="btn btn-sm btn-outline-danger py-0 ms-1"
-                                name="delete_job" value="<?= $j['id'] ?>">
-                            <i class="bi bi-trash"></i>
-                        </button>
-                    </form>
-                    <?php endif; ?>
-                </td>
-            </tr>
-            <?php if ($j['result']): ?>
-            <tr class="collapse" id="res-<?= $j['id'] ?>">
-                <td colspan="9" class="p-2">
-                    <pre class="result-pre mb-0"><?= htmlspecialchars($j['result']) ?></pre>
-                </td>
-            </tr>
+        <p class="text-muted small mb-0">
+            <i class="bi bi-clock me-1"></i>
+            <?php if ($pctSnap): ?>
+                Letzter Snapshot: <strong class="text-light"><?= htmlspecialchars($pctSnap) ?></strong>
+            <?php elseif ($lastRun): ?>
+                Letzter Lauf: <strong class="text-light"><?= htmlspecialchars($lastRun) ?></strong>
+            <?php else: ?>
+                Noch kein Snapshot — <code>fetch-usage.py</code> noch nicht gelaufen.
             <?php endif; ?>
-            <?php endforeach; ?>
-            <?php if (empty($jobs)): ?>
-            <tr><td colspan="9" class="text-center py-4 text-muted">
-                <i class="bi bi-inbox fs-3 d-block mb-2"></i>Noch keine Jobs. Ersten Job oben einreihen.
-            </td></tr>
-            <?php endif; ?>
-            </tbody>
-        </table>
-        </div>
+        </p>
+
     </div>
 </div>
 
@@ -623,8 +605,14 @@ $cacheEntry = $pdo->query("
     SELECT context_json, COALESCE(updated_at,created_at) AS ts, version, updated_by
     FROM claude_context_cache WHERE scope='session-compact' LIMIT 1
 ")->fetch(PDO::FETCH_ASSOC);
-$cacheDecoded = json_decode($cacheEntry['context_json'], true);
-$cacheSummary = $cacheDecoded['summary'] ?? $cacheEntry['context_json'];
+$cacheDecoded   = json_decode($cacheEntry['context_json'], true);
+$cacheSummary   = $cacheDecoded['summary'] ?? $cacheEntry['context_json'];
+$cacheSource    = $cacheDecoded['source']        ?? null;
+$cacheGithub    = $cacheDecoded['github_url']    ?? null;
+$cacheGenAt     = $cacheDecoded['generated_at']  ?? ($cacheDecoded['compacted_at'] ?? null);
+$cacheSessionId = $cacheDecoded['session_id']    ?? null;
+$cacheJobs      = $cacheDecoded['jobs_included'] ?? null;
+$cacheNewest    = $cacheDecoded['newest_job_id'] ?? null;
 ?>
 <div class="modal fade" id="cacheModal" tabindex="-1">
     <div class="modal-dialog modal-xl modal-dialog-scrollable">
@@ -648,7 +636,20 @@ $cacheSummary = $cacheDecoded['summary'] ?? $cacheEntry['context_json'];
                 <div class="px-3 py-2" style="background:#1c2128;border-bottom:1px solid #30363d;font-size:.75rem">
                     <span class="text-muted me-3"><i class="bi bi-clock me-1"></i><?= htmlspecialchars($cacheEntry['ts']) ?></span>
                     <span class="text-muted me-3"><i class="bi bi-person me-1"></i><?= htmlspecialchars($cacheEntry['updated_by'] ?? '–') ?></span>
-                    <span class="text-muted"><i class="bi bi-file-text me-1"></i><?= number_format(strlen($cacheSummary)) ?> Zeichen</span>
+                    <span class="text-muted me-3"><i class="bi bi-file-text me-1"></i><?= number_format(strlen($cacheSummary)) ?> Zeichen</span>
+                    <?php if ($cacheJobs !== null): ?>
+                    <span class="text-muted me-3"><i class="bi bi-list-check me-1"></i><?= (int)$cacheJobs ?> Jobs (bis #<?= (int)$cacheNewest ?>)</span>
+                    <?php elseif ($cacheSessionId): ?>
+                    <span class="text-muted me-3"><i class="bi bi-key me-1"></i><?= htmlspecialchars(substr($cacheSessionId,0,8)) ?>…</span>
+                    <?php endif; ?>
+                    <?php if ($cacheGenAt): ?>
+                    <span class="text-muted me-3"><i class="bi bi-arrow-clockwise me-1"></i><?= htmlspecialchars(substr($cacheGenAt,0,16)) ?></span>
+                    <?php endif; ?>
+                    <?php if ($cacheGithub): ?>
+                    <a href="<?= htmlspecialchars($cacheGithub) ?>" target="_blank" class="text-info text-decoration-none">
+                        <i class="bi bi-github me-1"></i>Repo
+                    </a>
+                    <?php endif; ?>
                 </div>
                 <pre id="cache-text" style="background:#0d1117;color:#e6edf3;font-size:.76rem;
                      font-family:'SFMono-Regular',Consolas,monospace;padding:1rem;

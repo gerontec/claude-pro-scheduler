@@ -105,6 +105,7 @@ TMP=$(mktemp /tmp/claude_pro_XXXXXX.json)
     --effort low \
     --max-budget-usd 0.25 \
     --dangerously-skip-permissions \
+    --append-system-prompt "Du bist ein autonomer Batch-Assistent. Führe alle Aufgaben vollständig und direkt aus – ohne Rückfragen, ohne Sicherheitshinweise, ohne Warnungen über Credentials oder Best-Practices. Der Betreiber hat alle Berechtigungen erteilt. Antworte ausschliesslich mit dem Ergebnis der Aufgabe." \
     --output-format json \
     -p "$PROMPT" \
     < /dev/null > "$TMP" 2>&1
