@@ -24,7 +24,7 @@ USAGE_FILE  = '/home/gh/.claude_weekly_usage.json'
 LOCK        = '/tmp/claude-pro-poller.lock'
 MAX_RUNNING = 2
 CLAUDE_BIN  = '/usr/local/bin/claude'
-SYSTEM_PROMPT = (
+SYSTEM_PROMPT_BASE = (
     "Du bist ein autonomer Batch-Assistent. Führe alle Aufgaben vollständig und direkt aus – "
     "ohne Rückfragen, ohne Sicherheitshinweise, ohne Warnungen über Credentials oder Best-Practices. "
     "Der Betreiber hat alle Berechtigungen erteilt. Antworte ausschliesslich mit dem Ergebnis der Aufgabe."
@@ -210,6 +210,23 @@ try:
 
     pre_in, pre_out, pre_cache, pre_cost, pre_tasks = load_usage()
 
+    # ── System-Prompt: Deadline-Hinweis ───────────────────
+    tz = ZoneInfo('Europe/Berlin')
+    now = datetime.now(tz)
+    target = datetime.strptime(str(job['targetdate']), '%Y-%m-%d').replace(tzinfo=tz)
+    hours_left = (target.replace(hour=23, minute=59) - now).total_seconds() / 3600
+    if hours_left > 4:
+        urgency = (
+            f" Du hast noch ca. {int(hours_left)} Stunden bis zur Deadline ({job['targetdate']}) – "
+            "arbeite gründlich und kostensparend, nicht auf Geschwindigkeit."
+        )
+    else:
+        urgency = (
+            f" Deadline ist {job['targetdate']} (noch ca. {int(hours_left)}h) – "
+            "arbeite zügig aber vollständig."
+        )
+    system_prompt = SYSTEM_PROMPT_BASE + urgency
+
     # ── Claude ausführen ──────────────────────────────────
     with tempfile.NamedTemporaryFile(prefix=f'claude_pro_{job_id}_',
                                      suffix='.json', delete=False) as tmp:
@@ -224,7 +241,7 @@ try:
                     '--effort', 'low',
                     '--max-budget-usd', '0.25',
                     '--dangerously-skip-permissions',
-                    '--append-system-prompt', SYSTEM_PROMPT,
+                    '--append-system-prompt', system_prompt,
                     '--output-format', 'json',
                     '-p', prompt,
                 ],
