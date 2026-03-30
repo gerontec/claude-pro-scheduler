@@ -87,8 +87,31 @@ finally:
 
 # ── Ab hier läuft diese Instanz unabhängig ─────────────────
 try:
-    # ── Infrastructure-Kontext voranstellen ──────────────
-    # Immer eingebunden; identischer Inhalt → Prompt-Cache-Hit ab 2. Job (~10% des Input-Preises)
+    # ── Kontext-Blöcke voranstellen ───────────────────────
+    # Identischer Inhalt über Jobs → Prompt-Cache-Hit ab 2. Job (~10% Input-Preis)
+    context_blocks = []
+
+    try:
+        with db.cursor() as cur:
+            cur.execute("""
+                SELECT category, label, value
+                FROM ki_localhost_cache
+                ORDER BY category, label
+            """)
+            rows = cur.fetchall()
+        if rows:
+            lines = ['## Batch-Server localhost (ki_localhost_cache)', '']
+            cur_cat = None
+            for r in rows:
+                if r['category'] != cur_cat:
+                    cur_cat = r['category']
+                    lines.append(f"\n### {cur_cat}")
+                lines.append(f"- **{r['label']}**: {r['value']}")
+            context_blocks.append('\n'.join(lines))
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: localhost-Cache Fehler: {e}",
+              file=sys.stderr)
+
     try:
         with db.cursor() as cur:
             cur.execute("""
@@ -102,26 +125,27 @@ try:
             lines = ['## Netzwerk-Infrastruktur (ki_infrastructure)', '']
             for r in infra_rows:
                 parts = [f"**{r['ip_address']}**"]
-                if r['hostname']:   parts.append(f"({r['hostname']})")
-                if r['network_range']: parts.append(f"[{r['network_range']}]")
+                if r['hostname']:       parts.append(f"({r['hostname']})")
+                if r['network_range']:  parts.append(f"[{r['network_range']}]")
                 if r['device_purpose']: parts.append(f"→ {r['device_purpose']}")
-                if r['open_ports']: parts.append(f"| Ports: {r['open_ports']}")
-                if r['services']:   parts.append(f"| Services: {r['services']}")
-                if r['os_guess']:   parts.append(f"| OS: {r['os_guess']}")
+                if r['open_ports']:     parts.append(f"| Ports: {r['open_ports']}")
+                if r['services']:       parts.append(f"| Services: {r['services']}")
+                if r['os_guess']:       parts.append(f"| OS: {r['os_guess']}")
                 lines.append('  '.join(parts))
-            infra_text = '\n'.join(lines)
-            if len(infra_text) <= 8000:
-                prompt = f"{infra_text}\n\n---\n{prompt}"
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: "
-                      f"Infrastructure-Kontext geladen ({len(infra_rows)} Hosts, {len(infra_text)} Zeichen)",
-                      file=sys.stderr)
-            else:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: "
-                      f"Infrastructure-Kontext übersprungen (zu groß: {len(infra_text)} Zeichen)",
-                      file=sys.stderr)
+            context_blocks.append('\n'.join(lines))
     except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: "
-              f"Infrastructure-Kontext Fehler: {e}", file=sys.stderr)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: Infra-Kontext Fehler: {e}",
+              file=sys.stderr)
+
+    if context_blocks:
+        combined = '\n\n'.join(context_blocks)
+        if len(combined) <= 12000:
+            prompt = f"{combined}\n\n---\n{prompt}"
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: "
+                  f"Kontext geladen ({len(combined)} Zeichen)", file=sys.stderr)
+        else:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: "
+                  f"Kontext übersprungen (zu groß: {len(combined)} Zeichen)", file=sys.stderr)
 
     # ── Session-Cache voranstellen wenn gewünscht ─────────
     if resume_session:
