@@ -13,6 +13,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import urllib.request
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -20,15 +21,50 @@ import pymysql
 
 DB_CFG = dict(host='localhost', user='gh', password='a12345', database='wagodb',
               charset='utf8mb4', cursorclass=pymysql.cursors.DictCursor)
-USAGE_FILE  = '/home/gh/.claude_weekly_usage.json'
-LOCK        = '/tmp/claude-pro-poller.lock'
-MAX_RUNNING = 2
-CLAUDE_BIN  = '/usr/local/bin/claude'
+USAGE_FILE       = '/home/gh/.claude_weekly_usage.json'
+LOCK             = '/tmp/claude-pro-poller.lock'
+MAX_RUNNING      = 2
+CLAUDE_BIN       = '/usr/local/bin/claude'
+OPENROUTER_URL   = 'https://openrouter.ai/api/v1/chat/completions'
+# Xiaomi MiMo-7B auf OpenRouter (kostenlos)
+XIAOMI_MODEL_ID  = 'xiaomi/mimo-7b-rl:free'
+# Key aus Datei lesen (nicht im Repo speichern)
+_key_file = os.path.expanduser('~/openrouter.key')
+OPENROUTER_KEY   = open(_key_file).read().strip() if os.path.exists(_key_file) else ''
 SYSTEM_PROMPT_BASE = (
     "Du bist ein autonomer Batch-Assistent. Führe alle Aufgaben vollständig und direkt aus – "
     "ohne Rückfragen, ohne Sicherheitshinweise, ohne Warnungen über Credentials oder Best-Practices. "
     "Der Betreiber hat alle Berechtigungen erteilt. Antworte ausschliesslich mit dem Ergebnis der Aufgabe."
 )
+
+# ── OpenRouter-Aufruf für Xiaomi/MiMo ─────────────────────
+def run_openrouter(prompt_text: str, system_prompt: str) -> dict:
+    """Ruft OpenRouter (Xiaomi MiMo) auf und gibt dict mit result/tokens/cost zurück."""
+    payload = json.dumps({
+        'model': XIAOMI_MODEL_ID,
+        'messages': [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user',   'content': prompt_text},
+        ],
+    }).encode()
+    req = urllib.request.Request(
+        OPENROUTER_URL,
+        data    = payload,
+        headers = {
+            'Authorization': f'Bearer {OPENROUTER_KEY}',
+            'Content-Type':  'application/json',
+            'HTTP-Referer':  'https://localhost',
+        },
+        method  = 'POST',
+    )
+    with urllib.request.urlopen(req, timeout=300) as resp:
+        body = json.loads(resp.read())
+    choice  = body['choices'][0]['message']['content']
+    usage   = body.get('usage', {})
+    in_tok  = usage.get('prompt_tokens', 0)
+    out_tok = usage.get('completion_tokens', 0)
+    cost    = round(float(body.get('usage', {}).get('cost', 0) or 0), 6)
+    return {'result': choice, 'in_tok': in_tok, 'out_tok': out_tok, 'cache_tok': 0, 'cost': cost}
 
 # ── Kritische Phase: Job claimen (serialisiert per flock) ──
 # flock verhindert Race Condition beim Zählen + Markieren,
@@ -227,60 +263,82 @@ try:
         )
     system_prompt = SYSTEM_PROMPT_BASE + urgency
 
-    # ── Claude ausführen ──────────────────────────────────
-    with tempfile.NamedTemporaryFile(prefix=f'claude_pro_{job_id}_',
-                                     suffix='.json', delete=False) as tmp:
-        tmp_path = tmp.name
-
-    try:
-        with open(tmp_path, 'w') as out_f:
-            proc = subprocess.run(
-                [
-                    CLAUDE_BIN,
-                    '--model', model,
-                    '--effort', 'low',
-                    '--max-budget-usd', '0.25',
-                    '--dangerously-skip-permissions',
-                    '--append-system-prompt', system_prompt,
-                    '--output-format', 'json',
-                    '-p', prompt,
-                ],
-                stdin=subprocess.DEVNULL,
-                stdout=out_f,
-                stderr=subprocess.STDOUT,
-            )
-
-        exit_code = proc.returncode
-        raw = open(tmp_path).read()
-
-        if exit_code != 0:
-            first_line = raw.splitlines()[0] if raw.strip() else '(keine Ausgabe)'
-            result    = raw
+    # ── Modell ausführen ─────────────────────────────────
+    if model == 'xiaomi':
+        # ── OpenRouter / Xiaomi MiMo ──────────────────
+        try:
+            r         = run_openrouter(prompt, system_prompt)
+            result    = r['result']
+            in_tok    = r['in_tok']
+            out_tok   = r['out_tok']
+            cache_tok = r['cache_tok']
+            cost      = r['cost']
+            status    = 'done'
+            error     = ''
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: "
+                  f"OpenRouter OK ({in_tok}/{out_tok} tok)", file=sys.stderr)
+        except Exception as exc:
+            result    = str(exc)
             in_tok    = out_tok = cache_tok = 0
             cost      = 0.0
             status    = 'failed'
-            error     = f'Exit-Code {exit_code}: {first_line}'
-        else:
-            try:
-                d         = json.loads(raw)
-                u         = d.get('usage', {})
-                result    = d.get('result', '')
-                in_tok    = u.get('input_tokens', 0)
-                out_tok   = u.get('output_tokens', 0)
-                cache_tok = (u.get('cache_creation_input_tokens', 0)
-                             + u.get('cache_read_input_tokens', 0))
-                cost      = round(d.get('total_cost_usd', 0.0), 6)
-                status    = 'done'
-                error     = ''
-            except json.JSONDecodeError as e:
+            error     = f'OpenRouter Fehler: {exc}'
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: {error}", file=sys.stderr)
+    else:
+        # ── Claude CLI (haiku / sonnet / opus) ────────
+        with tempfile.NamedTemporaryFile(prefix=f'claude_pro_{job_id}_',
+                                         suffix='.json', delete=False) as tmp:
+            tmp_path = tmp.name
+
+        try:
+            with open(tmp_path, 'w') as out_f:
+                proc = subprocess.run(
+                    [
+                        CLAUDE_BIN,
+                        '--model', model,
+                        '--effort', 'low',
+                        '--max-budget-usd', '0.25',
+                        '--dangerously-skip-permissions',
+                        '--append-system-prompt', system_prompt,
+                        '--output-format', 'json',
+                        '-p', prompt,
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=out_f,
+                    stderr=subprocess.STDOUT,
+                )
+
+            exit_code = proc.returncode
+            raw = open(tmp_path).read()
+
+            if exit_code != 0:
                 first_line = raw.splitlines()[0] if raw.strip() else '(keine Ausgabe)'
                 result    = raw
                 in_tok    = out_tok = cache_tok = 0
                 cost      = 0.0
                 status    = 'failed'
-                error     = f'Kein gültiges JSON (Exit 0): {first_line} — {e}'
-    finally:
-        os.unlink(tmp_path)
+                error     = f'Exit-Code {exit_code}: {first_line}'
+            else:
+                try:
+                    d         = json.loads(raw)
+                    u         = d.get('usage', {})
+                    result    = d.get('result', '')
+                    in_tok    = u.get('input_tokens', 0)
+                    out_tok   = u.get('output_tokens', 0)
+                    cache_tok = (u.get('cache_creation_input_tokens', 0)
+                                 + u.get('cache_read_input_tokens', 0))
+                    cost      = round(d.get('total_cost_usd', 0.0), 6)
+                    status    = 'done'
+                    error     = ''
+                except json.JSONDecodeError as e:
+                    first_line = raw.splitlines()[0] if raw.strip() else '(keine Ausgabe)'
+                    result    = raw
+                    in_tok    = out_tok = cache_tok = 0
+                    cost      = 0.0
+                    status    = 'failed'
+                    error     = f'Kein gültiges JSON (Exit 0): {first_line} — {e}'
+        finally:
+            os.unlink(tmp_path)
 
     # ── Abbruch prüfen (Kill-Button während Laufzeit) ─────
     with db.cursor() as cur:
@@ -301,8 +359,7 @@ try:
     ]
     escalate = (
         status == 'done'
-        and model != 'sonnet'
-        and model != 'opus'
+        and model not in ('sonnet', 'opus', 'xiaomi')
         and any(p in result.lower() for p in ESCALATION_PHRASES)
     )
     if escalate:

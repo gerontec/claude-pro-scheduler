@@ -35,7 +35,7 @@ function dur($a,$b){
     $s=strtotime($b)-strtotime($a);
     return $s<60?"{$s}s":floor($s/60)."m".($s%60)."s";
 }
-$colors=['haiku'=>'success','sonnet'=>'primary','opus'=>'warning'];
+$colors=['haiku'=>'success','sonnet'=>'primary','opus'=>'warning','xiaomi'=>'danger'];
 $statusColors=['queued'=>'warning','running'=>'info','done'=>'success','failed'=>'danger'];
 $autoRefresh = in_array($j['status'], ['queued','running']);
 ?><!DOCTYPE html>

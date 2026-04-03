@@ -8,7 +8,7 @@ $msg = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['submit_job'])) {
         $targetdate     = $_POST['targetdate'] ?: date('Y-m-d');
-        $model          = in_array($_POST['model'], ['haiku','sonnet','opus']) ? $_POST['model'] : 'haiku';
+        $model          = in_array($_POST['model'], ['haiku','sonnet','opus','xiaomi']) ? $_POST['model'] : 'haiku';
         $prompt         = trim($_POST['prompt']);
         $resume_session = isset($_POST['resume_session']) ? 1 : 0;
         if ($prompt) {
@@ -164,7 +164,7 @@ if ($compact && $compact['ts']) {
 
 // ── Helper functions ───────────────────────────────────────
 function modelBadge($m) {
-    $map = ['haiku'=>'success','sonnet'=>'primary','opus'=>'warning'];
+    $map = ['haiku'=>'success','sonnet'=>'primary','opus'=>'warning','xiaomi'=>'danger'];
     $cls = $map[$m] ?? 'secondary';
     return "<span class=\"badge bg-$cls\">$m</span>";
 }
@@ -256,6 +256,7 @@ body { background:#0d1117; }
                         <option value="haiku" selected>🟢 Haiku — Standard (1×)</option>
                         <option value="sonnet">🔵 Sonnet — Complex (~4×)</option>
                         <option value="opus">🟣 Opus — Maximum (~19×)</option>
+                        <option value="xiaomi">🔴 Xiaomi MiMo — Free (OpenRouter)</option>
                     </select>
                 </div>
                 <div class="col-12 col-sm-auto d-flex align-items-end pb-1">
