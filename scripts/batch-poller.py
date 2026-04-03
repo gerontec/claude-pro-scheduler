@@ -26,8 +26,11 @@ LOCK             = '/tmp/claude-pro-poller.lock'
 MAX_RUNNING      = 2
 CLAUDE_BIN       = '/usr/local/bin/claude'
 OPENROUTER_URL   = 'https://openrouter.ai/api/v1/chat/completions'
-# Xiaomi MiMo-7B auf OpenRouter (kostenlos)
-XIAOMI_MODEL_ID  = 'xiaomi/mimo-7b-rl:free'
+# OpenRouter-Modelle: job.model → OpenRouter-ID
+OPENROUTER_MODELS = {
+    'xiaomi':    'xiaomi/mimo-7b-rl:free',
+    'mimo-pro':  'xiaomi/mimo-v2-pro',
+}
 # Key aus Datei lesen (nicht im Repo speichern)
 _key_file = os.path.expanduser('~/openrouter.key')
 OPENROUTER_KEY   = open(_key_file).read().strip() if os.path.exists(_key_file) else ''
@@ -38,10 +41,10 @@ SYSTEM_PROMPT_BASE = (
 )
 
 # ── OpenRouter-Aufruf für Xiaomi/MiMo ─────────────────────
-def run_openrouter(prompt_text: str, system_prompt: str) -> dict:
-    """Ruft OpenRouter (Xiaomi MiMo) auf und gibt dict mit result/tokens/cost zurück."""
+def run_openrouter(prompt_text: str, system_prompt: str, or_model_id: str) -> dict:
+    """Ruft OpenRouter auf und gibt dict mit result/tokens/cost zurück."""
     payload = json.dumps({
-        'model': XIAOMI_MODEL_ID,
+        'model': or_model_id,
         'messages': [
             {'role': 'system', 'content': system_prompt},
             {'role': 'user',   'content': prompt_text},
@@ -264,10 +267,10 @@ try:
     system_prompt = SYSTEM_PROMPT_BASE + urgency
 
     # ── Modell ausführen ─────────────────────────────────
-    if model == 'xiaomi':
-        # ── OpenRouter / Xiaomi MiMo ──────────────────
+    if model in OPENROUTER_MODELS:
+        # ── OpenRouter (Xiaomi MiMo / MiMo-Pro / …) ──
         try:
-            r         = run_openrouter(prompt, system_prompt)
+            r         = run_openrouter(prompt, system_prompt, OPENROUTER_MODELS[model])
             result    = r['result']
             in_tok    = r['in_tok']
             out_tok   = r['out_tok']
@@ -359,7 +362,7 @@ try:
     ]
     escalate = (
         status == 'done'
-        and model not in ('sonnet', 'opus', 'xiaomi')
+        and model not in ('sonnet', 'opus', *OPENROUTER_MODELS)
         and any(p in result.lower() for p in ESCALATION_PHRASES)
     )
     if escalate:

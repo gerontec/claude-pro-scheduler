@@ -8,7 +8,7 @@ $msg = '';
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['submit_job'])) {
         $targetdate     = $_POST['targetdate'] ?: date('Y-m-d');
-        $model          = in_array($_POST['model'], ['haiku','sonnet','opus','xiaomi']) ? $_POST['model'] : 'haiku';
+        $model          = in_array($_POST['model'], ['haiku','sonnet','opus','xiaomi','mimo-pro']) ? $_POST['model'] : 'haiku';
         $prompt         = trim($_POST['prompt']);
         $resume_session = isset($_POST['resume_session']) ? 1 : 0;
         if ($prompt) {
@@ -164,9 +164,11 @@ if ($compact && $compact['ts']) {
 
 // ── Helper functions ───────────────────────────────────────
 function modelBadge($m) {
-    $map = ['haiku'=>'success','sonnet'=>'primary','opus'=>'warning','xiaomi'=>'danger'];
+    $map = ['haiku'=>'success','sonnet'=>'primary','opus'=>'warning','xiaomi'=>'danger','mimo-pro'=>'danger'];
+    $labels = ['mimo-pro' => 'MiMo-Pro'];
     $cls = $map[$m] ?? 'secondary';
-    return "<span class=\"badge bg-$cls\">$m</span>";
+    $lbl = $labels[$m] ?? $m;
+    return "<span class=\"badge bg-$cls\">$lbl</span>";
 }
 function statusBadge($s) {
     $map = ['queued'=>'warning','running'=>'info','done'=>'success','failed'=>'danger'];
@@ -257,6 +259,7 @@ body { background:#0d1117; }
                         <option value="sonnet">🔵 Sonnet — Complex (~4×)</option>
                         <option value="opus">🟣 Opus — Maximum (~19×)</option>
                         <option value="xiaomi">🔴 Xiaomi MiMo — Free (OpenRouter)</option>
+                        <option value="mimo-pro">🔴 Xiaomi MiMo V2 Pro (OpenRouter)</option>
                     </select>
                 </div>
                 <div class="col-12 col-sm-auto d-flex align-items-end pb-1">
