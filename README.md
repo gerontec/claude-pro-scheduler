@@ -7,7 +7,7 @@ Automatisierter Batch-Job-Scheduler für Claude Pro Abo (Claude Code CLI).
 - **Web UI** (Bootstrap 5, Mobile-optimiert) zum Einreichen von Claude-Aufgaben
 - **Automatische Ausführung** via Cron (jede Minute)
 - **Wochenlimit-Tracking** mit Fortschrittsbalken (Reset: Freitag 08:00 MEZ)
-- **Modellauswahl**: Haiku (Standard, ~1×) · Sonnet (~4×) · Opus (~19×)
+- **Modellauswahl**: Haiku (Standard, ~1×) · Sonnet (~4×) · Opus (~19×) · Xiaomi MiMo (OpenRouter, free) · MiMo-V2-Pro (OpenRouter)
 - **Kostentracking** pro Job + Wochensumme in MariaDB
 - **fetch-usage.py**: Automatisches Auslesen des Claude Pro Limits via pexpect
 - **Reschedule / Löschen** direkt im UI
@@ -67,10 +67,31 @@ CREATE TABLE claude_pro_batch (
 ### Web
 Dateien aus `web/` nach `/var/www/html/api/batch/` kopieren.
 
-## Kosten (Anthropic API)
+## Costs
 
-| Modell | Input/MTok | Output/MTok | Faktor |
+### Anthropic (via Claude Code CLI)
+
+| Model | Input/MTok | Output/MTok | Factor |
 |---|---|---|---|
 | Haiku 4.5 | $0.80 | $4.00 | 1× |
 | Sonnet 4.6 | $3.00 | $15.00 | ~4× |
 | Opus 4.6 | $15.00 | $75.00 | ~19× |
+
+### OpenRouter — Xiaomi MiMo models
+
+OpenRouter models are dispatched directly via REST API (no Claude CLI required).
+Store your key in `~/openrouter.key` (chmod 600) — it is never committed to the repo.
+
+| Model | `job.model` value | Input/MTok | Cache-Read/MTok | Output/MTok |
+|---|---|---|---|---|
+| MiMo-7B-RL | `xiaomi` | free | free | free |
+| MiMo-V2-Pro | `mimo-pro` | $1.00 | **$0.20** | $3.00 |
+
+#### Automatic prompt caching (MiMo-V2-Pro)
+
+OpenRouter caches identical prompt prefixes server-side — no extra API parameters needed.
+Jobs that share the same system prompt and context blocks (`ki_localhost_cache`, `ki_infrastructure`)
+will have those tokens billed at the **cache-read rate: 80% cheaper** than normal input.
+
+The poller reads `cache_read_input_tokens` from the response and stores them in the DB
+(`cache_tokens` column), so cache savings are visible in the Web UI cost statistics.
