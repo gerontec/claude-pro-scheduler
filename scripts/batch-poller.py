@@ -62,12 +62,15 @@ def run_openrouter(prompt_text: str, system_prompt: str, or_model_id: str) -> di
     )
     with urllib.request.urlopen(req, timeout=300) as resp:
         body = json.loads(resp.read())
-    choice  = body['choices'][0]['message']['content']
-    usage   = body.get('usage', {})
-    in_tok  = usage.get('prompt_tokens', 0)
-    out_tok = usage.get('completion_tokens', 0)
-    cost    = round(float(body.get('usage', {}).get('cost', 0) or 0), 6)
-    return {'result': choice, 'in_tok': in_tok, 'out_tok': out_tok, 'cache_tok': 0, 'cost': cost}
+    choice    = body['choices'][0]['message']['content']
+    usage     = body.get('usage', {})
+    in_tok    = usage.get('prompt_tokens', 0)
+    out_tok   = usage.get('completion_tokens', 0)
+    # Cache-Read-Tokens (OpenRouter meldet sie im usage-Objekt zurück)
+    cache_tok = (usage.get('cache_read_input_tokens', 0)
+                 + usage.get('prompt_tokens_details', {}).get('cached_tokens', 0))
+    cost      = round(float(usage.get('cost', 0) or 0), 6)
+    return {'result': choice, 'in_tok': in_tok, 'out_tok': out_tok, 'cache_tok': cache_tok, 'cost': cost}
 
 # ── Kritische Phase: Job claimen (serialisiert per flock) ──
 # flock verhindert Race Condition beim Zählen + Markieren,
