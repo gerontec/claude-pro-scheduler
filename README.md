@@ -79,19 +79,9 @@ Dateien aus `web/` nach `/var/www/html/api/batch/` kopieren.
 
 ### OpenRouter — Xiaomi MiMo models
 
-OpenRouter models are dispatched directly via REST API (no Claude CLI required).
-Store your key in `~/openrouter.key` (chmod 600) — it is never committed to the repo.
+See **[openrouter.md](openrouter.md)** for full pricing, caching details, and all available models.
 
 | Model | `job.model` value | Input/MTok | Cache-Read/MTok | Output/MTok |
 |---|---|---|---|---|
 | MiMo-7B-RL | `xiaomi` | free | free | free |
 | MiMo-V2-Pro | `mimo-pro` | $1.00 | **$0.20** | $3.00 |
-
-#### Automatic prompt caching (MiMo-V2-Pro)
-
-OpenRouter caches identical prompt prefixes server-side — no extra API parameters needed.
-Jobs that share the same system prompt and context blocks (`ki_localhost_cache`, `ki_infrastructure`)
-will have those tokens billed at the **cache-read rate: 80% cheaper** than normal input.
-
-The poller reads `cache_read_input_tokens` from the response and stores them in the DB
-(`cache_tokens` column), so cache savings are visible in the Web UI cost statistics.
