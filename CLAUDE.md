@@ -103,3 +103,19 @@ Aktueller Stand in MariaDB:
 mysql -u gh -pa12345 wagodb \
   -e "SELECT label, value FROM ki_localhost_cache WHERE category='openrouter' ORDER BY label"
 ```
+
+---
+
+## delegate — Direkt-Befehl ohne API-Key (empfohlen)
+
+Statt curl: einfach `delegate` aufrufen — Key ist eingebaut.
+
+```bash
+delegate "Aufgabe …"                   # Job einreichen
+delegate --wait "Aufgabe …"            # einreichen + auf Ergebnis warten
+delegate --model mimo-pro "Aufgabe …"  # anderes Modell
+delegate --list                         # letzte Jobs anzeigen
+delegate --status 42                    # Job-Status + Ergebnis
+```
+
+Verfügbar auf jedem PC nach: `curl -O https://raw.githubusercontent.com/gerontec/claude-pro-scheduler/main/delegate.py && chmod +x delegate.py`
