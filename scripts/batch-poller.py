@@ -23,7 +23,7 @@ DB_CFG = dict(host='localhost', user='gh', password='a12345', database='wagodb',
               charset='utf8mb4', cursorclass=pymysql.cursors.DictCursor)
 USAGE_FILE       = '/home/gh/.claude_weekly_usage.json'
 LOCK             = '/tmp/claude-pro-poller.lock'
-MAX_RUNNING      = 2
+MAX_RUNNING      = 9
 CLAUDE_BIN       = '/usr/local/bin/claude'
 OPENROUTER_URL      = 'https://openrouter.ai/api/v1/chat/completions'
 OPENROUTER_CREDITS  = 'https://openrouter.ai/api/v1/credits'
