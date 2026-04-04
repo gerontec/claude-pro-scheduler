@@ -478,6 +478,26 @@ try:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] OpenRouter Guthaben Fehler: {e}",
                   file=sys.stderr)
 
+
+    # ── Ergebnis via MQTT publizieren ────────────────────
+    try:
+        import paho.mqtt.client as _mqtt
+        _mc = _mqtt.Client(_mqtt.CallbackAPIVersion.VERSION2,
+                           client_id=f'ki-poller-{job_id}', clean_session=True)
+        _mc.connect('192.168.178.218', 1883, keepalive=10)
+        _payload = json.dumps({
+            'id':       job_id,
+            'status':   status,
+            'model':    model,
+            'result':   result[:4000] if result else '',
+            'cost_usd': cost,
+        })
+        _mc.publish(f'ki/job/result/{job_id}', _payload, qos=1)
+        _mc.publish('ki/job/result', _payload, qos=1)
+        _mc.disconnect()
+    except Exception as _e:
+        pass  # MQTT optional — Job-Ergebnis ist bereits in DB
+
     # ── Session-Compact Cache aktualisieren ───────────────
     subprocess.run(
         ['python3', '/home/gh/cache-saver.py', '--compact'],

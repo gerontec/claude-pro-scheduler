@@ -1,0 +1,14 @@
+[Unit]
+Description=KI Batch MQTT Listener
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /home/gh/mqtt-listener.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=append:/tmp/mqtt-listener.log
+StandardError=append:/tmp/mqtt-listener.log
+
+[Install]
+WantedBy=default.target
