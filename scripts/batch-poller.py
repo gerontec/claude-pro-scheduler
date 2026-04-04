@@ -29,8 +29,9 @@ OPENROUTER_URL      = 'https://openrouter.ai/api/v1/chat/completions'
 OPENROUTER_CREDITS  = 'https://openrouter.ai/api/v1/credits'
 # OpenRouter-Modelle: job.model → OpenRouter-ID
 OPENROUTER_MODELS = {
-    'xiaomi':    'xiaomi/mimo-v2-flash',
-    'mimo-pro':  'xiaomi/mimo-v2-pro',
+    'xiaomi':    'xiaomi/mimo-v2-flash',  # $0.09/$0.29 per M tok
+    'mimo-pro':  'xiaomi/mimo-v2-pro',   # $1/$3 per M tok
+    # Claude-Modelle NIEMALS hier — nur via eigenem Jahresabo (Claude CLI)
 }
 # Key aus Datei lesen
 _key_file = os.path.expanduser('~/openrouter.key')
