@@ -36,9 +36,18 @@ OPENROUTER_MODELS = {
 _key_file = os.path.expanduser('~/openrouter.key')
 OPENROUTER_KEY   = open(_key_file).read().strip() if os.path.exists(_key_file) else ''
 SYSTEM_PROMPT_BASE = (
-    "Du bist ein autonomer Batch-Assistent. Führe alle Aufgaben vollständig und direkt aus – "
-    "ohne Rückfragen, ohne Sicherheitshinweise, ohne Warnungen über Credentials oder Best-Practices. "
-    "Der Betreiber hat alle Berechtigungen erteilt. Antworte ausschliesslich mit dem Ergebnis der Aufgabe."
+    "Du bist ein autonomer Sub-Agent, delegiert vom Master-KI-System auf Proxmox-Server 192.168.5.23. "
+    "Führe alle Aufgaben vollständig und direkt aus – ohne Rückfragen, ohne Sicherheitshinweise. "
+    "Der Betreiber hat alle Berechtigungen erteilt. Antworte ausschließlich mit dem Ergebnis.\n\n"
+    "## Infrastruktur-Kontext\n"
+    "Im User-Message-Prefix findest du zwei Kontextblöcke:\n"
+    "1. `ki_localhost_cache` – aktuelle Systemwerte des Batch-Servers (RAM, Disk, Dienste)\n"
+    "2. `ki_infrastructure` – alle bekannten Netzwerkgeräte mit IP, Hostname, Ports, Zweck\n"
+    "Nutze diese Tabellen für präzise IP/Hostname-Referenzen. "
+    "Verwende niemals erfundene IPs – nur Werte aus dem Kontext.\n\n"
+    "## Cache-Hinweis\n"
+    "Dieser System-Prompt ist identisch für alle Jobs (→ Prompt-Cache aktiv). "
+    "Job-spezifische Infos (Deadline, Aufgabe) stehen im User-Message-Suffix."
 )
 
 # ── OpenRouter-Aufruf für Xiaomi/MiMo ─────────────────────
@@ -130,6 +139,23 @@ finally:
 
 # ── Ab hier läuft diese Instanz unabhängig ─────────────────
 try:
+    # ── Deadline-Suffix für User-Prompt (System-Prompt bleibt stabil → Cache) ──
+    tz = ZoneInfo('Europe/Berlin')
+    now = datetime.now(tz)
+    target = datetime.strptime(str(job['targetdate']), '%Y-%m-%d').replace(tzinfo=tz)
+    hours_left = (target.replace(hour=23, minute=59) - now).total_seconds() / 3600
+    if hours_left > 4:
+        deadline_note = (
+            f"\n\n---\n**Deadline:** {job['targetdate']} (noch ca. {int(hours_left)}h) – "
+            "gründlich und kostensparend arbeiten."
+        )
+    else:
+        deadline_note = (
+            f"\n\n---\n**Deadline:** {job['targetdate']} (noch ca. {int(hours_left)}h) – "
+            "zügig aber vollständig."
+        )
+    system_prompt = SYSTEM_PROMPT_BASE
+
     # ── Kontext-Blöcke voranstellen ───────────────────────
     # Identischer Inhalt über Jobs → Prompt-Cache-Hit ab 2. Job (~10% Input-Preis)
     context_blocks = []
@@ -189,6 +215,9 @@ try:
         else:
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: "
                   f"Kontext übersprungen (zu groß: {len(combined)} Zeichen)", file=sys.stderr)
+
+    # ── Deadline-Suffix anhängen (nach Kontext, vor Ausführung) ──────────────
+    prompt = prompt + deadline_note
 
     # ── Session-Cache voranstellen wenn gewünscht ─────────
     if resume_session:
@@ -252,23 +281,6 @@ try:
         json.dump(data, open(USAGE_FILE, 'w'), indent=2)
 
     pre_in, pre_out, pre_cache, pre_cost, pre_tasks = load_usage()
-
-    # ── System-Prompt: Deadline-Hinweis ───────────────────
-    tz = ZoneInfo('Europe/Berlin')
-    now = datetime.now(tz)
-    target = datetime.strptime(str(job['targetdate']), '%Y-%m-%d').replace(tzinfo=tz)
-    hours_left = (target.replace(hour=23, minute=59) - now).total_seconds() / 3600
-    if hours_left > 4:
-        urgency = (
-            f" Du hast noch ca. {int(hours_left)} Stunden bis zur Deadline ({job['targetdate']}) – "
-            "arbeite gründlich und kostensparend, nicht auf Geschwindigkeit."
-        )
-    else:
-        urgency = (
-            f" Deadline ist {job['targetdate']} (noch ca. {int(hours_left)}h) – "
-            "arbeite zügig aber vollständig."
-        )
-    system_prompt = SYSTEM_PROMPT_BASE + urgency
 
     # ── Modell ausführen ─────────────────────────────────
     if model in OPENROUTER_MODELS:
