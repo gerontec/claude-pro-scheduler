@@ -11,14 +11,14 @@ statt sie selbst zu bearbeiten. Das schont dein Kontingent und ist 54× günstig
 
 ## Batch-Job-System (Sub-Agent-Delegation)
 
-**API-Endpunkt:** `http://localhost/api/batch/api.php`  
+**API-Endpunkt:** `http://192.168.5.23/api/batch/api.php`  
 **Auth-Header:** `X-API-Key: 2a61f527ded09cc2832cb49f8829f299`  
-**Web-UI:** `http://localhost/api/batch/`
+**Web-UI:** `http://192.168.5.23/api/batch/`
 
 ### Job einreichen (curl)
 
 ```bash
-curl -s -X POST http://localhost/api/batch/api.php \
+curl -s -X POST http://192.168.5.23/api/batch/api.php \
   -H "X-API-Key: 2a61f527ded09cc2832cb49f8829f299" \
   -H "Content-Type: application/json" \
   -d '{
@@ -32,7 +32,7 @@ curl -s -X POST http://localhost/api/batch/api.php \
 ### Job-Status prüfen
 
 ```bash
-curl -s "http://localhost/api/batch/api.php?id=42&full=1&apikey=2a61f527ded09cc2832cb49f8829f299"
+curl -s "http://192.168.5.23/api/batch/api.php?id=42&full=1&apikey=2a61f527ded09cc2832cb49f8829f299"
 # → {"status":"done","result":"…","cost_usd":"0.000538"}
 ```
 
@@ -40,7 +40,7 @@ curl -s "http://localhost/api/batch/api.php?id=42&full=1&apikey=2a61f527ded09cc2
 
 ```bash
 while true; do
-  STATUS=$(curl -s "http://localhost/api/batch/api.php?id=42&apikey=2a61f527ded09cc2832cb49f8829f299" \
+  STATUS=$(curl -s "http://192.168.5.23/api/batch/api.php?id=42&apikey=2a61f527ded09cc2832cb49f8829f299" \
     | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
   [ "$STATUS" = "done" ] || [ "$STATUS" = "failed" ] && break
   sleep 5
@@ -51,7 +51,7 @@ done
 
 ```bash
 for prompt in "Aufgabe 1" "Aufgabe 2" "Aufgabe 3"; do
-  curl -s -X POST http://localhost/api/batch/api.php \
+  curl -s -X POST http://192.168.5.23/api/batch/api.php \
     -H "X-API-Key: 2a61f527ded09cc2832cb49f8829f299" \
     -H "Content-Type: application/json" \
     -d "{\"model\":\"xiaomi\",\"prompt\":\"$prompt\"}" &
