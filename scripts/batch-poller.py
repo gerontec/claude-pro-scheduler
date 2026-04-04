@@ -316,6 +316,9 @@ try:
         try:
             with open(tmp_path, 'w') as out_f:
                 try:
+                    # Umgebung bereinigen: ANTHROPIC_BASE_URL zeigt sonst auf Ollama
+                    clean_env = {k: v for k, v in os.environ.items()
+                                 if k not in ('ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN')}
                     proc = subprocess.run(
                         [
                             CLAUDE_BIN,
@@ -331,6 +334,7 @@ try:
                         stdout=out_f,
                         stderr=subprocess.STDOUT,
                         timeout=TIMEOUT_SEC,
+                        env=clean_env,
                     )
                     exit_code = proc.returncode
                 except subprocess.TimeoutExpired:
