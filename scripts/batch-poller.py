@@ -25,13 +25,14 @@ USAGE_FILE       = '/home/gh/.claude_weekly_usage.json'
 LOCK             = '/tmp/claude-pro-poller.lock'
 MAX_RUNNING      = 2
 CLAUDE_BIN       = '/usr/local/bin/claude'
-OPENROUTER_URL   = 'https://openrouter.ai/api/v1/chat/completions'
+OPENROUTER_URL      = 'https://openrouter.ai/api/v1/chat/completions'
+OPENROUTER_CREDITS  = 'https://openrouter.ai/api/v1/credits'
 # OpenRouter-Modelle: job.model → OpenRouter-ID
 OPENROUTER_MODELS = {
-    'xiaomi':    'xiaomi/mimo-7b-rl:free',
+    'xiaomi':    'xiaomi/mimo-v2-flash',
     'mimo-pro':  'xiaomi/mimo-v2-pro',
 }
-# Key aus Datei lesen (nicht im Repo speichern)
+# Key aus Datei lesen
 _key_file = os.path.expanduser('~/openrouter.key')
 OPENROUTER_KEY   = open(_key_file).read().strip() if os.path.exists(_key_file) else ''
 SYSTEM_PROMPT_BASE = (
@@ -62,14 +63,14 @@ def run_openrouter(prompt_text: str, system_prompt: str, or_model_id: str) -> di
     )
     with urllib.request.urlopen(req, timeout=300) as resp:
         body = json.loads(resp.read())
-    choice    = body['choices'][0]['message']['content']
-    usage     = body.get('usage', {})
-    in_tok    = usage.get('prompt_tokens', 0)
-    out_tok   = usage.get('completion_tokens', 0)
+    choice     = body['choices'][0]['message']['content']
+    usage      = body.get('usage', {})
+    in_tok     = usage.get('prompt_tokens', 0)
+    out_tok    = usage.get('completion_tokens', 0)
     # Cache-Read-Tokens (OpenRouter meldet sie im usage-Objekt zurück)
-    cache_tok = (usage.get('cache_read_input_tokens', 0)
-                 + usage.get('prompt_tokens_details', {}).get('cached_tokens', 0))
-    cost      = round(float(usage.get('cost', 0) or 0), 6)
+    cache_tok  = (usage.get('cache_read_input_tokens', 0)
+                  + usage.get('prompt_tokens_details', {}).get('cached_tokens', 0))
+    cost       = round(float(usage.get('cost', 0) or 0), 6)
     return {'result': choice, 'in_tok': in_tok, 'out_tok': out_tok, 'cache_tok': cache_tok, 'cost': cost}
 
 # ── Kritische Phase: Job claimen (serialisiert per flock) ──
@@ -95,7 +96,7 @@ try:
 
     with db.cursor() as cur:
         cur.execute("""
-            SELECT id, model, resume_session, prompt
+            SELECT id, targetdate, model, resume_session, prompt
             FROM claude_pro_batch
             WHERE status='queued'
             ORDER BY targetdate ASC, created_at ASC
@@ -296,28 +297,44 @@ try:
                                          suffix='.json', delete=False) as tmp:
             tmp_path = tmp.name
 
+        TIMEOUT_SEC = 4 * 3600  # 4 Stunden
+        timed_out   = False
+
         try:
             with open(tmp_path, 'w') as out_f:
-                proc = subprocess.run(
-                    [
-                        CLAUDE_BIN,
-                        '--model', model,
-                        '--effort', 'low',
-                        '--max-budget-usd', '0.25',
-                        '--dangerously-skip-permissions',
-                        '--append-system-prompt', system_prompt,
-                        '--output-format', 'json',
-                        '-p', prompt,
-                    ],
-                    stdin=subprocess.DEVNULL,
-                    stdout=out_f,
-                    stderr=subprocess.STDOUT,
-                )
+                try:
+                    proc = subprocess.run(
+                        [
+                            CLAUDE_BIN,
+                            '--model', model,
+                            '--effort', 'low',
+                            '--max-budget-usd', '0.25',
+                            '--dangerously-skip-permissions',
+                            '--append-system-prompt', system_prompt,
+                            '--output-format', 'json',
+                            '-p', prompt,
+                        ],
+                        stdin=subprocess.DEVNULL,
+                        stdout=out_f,
+                        stderr=subprocess.STDOUT,
+                        timeout=TIMEOUT_SEC,
+                    )
+                    exit_code = proc.returncode
+                except subprocess.TimeoutExpired:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: "
+                          f"Timeout nach {TIMEOUT_SEC//3600}h — Prozess wird gekillt", file=sys.stderr)
+                    timed_out = True
+                    exit_code = -1
 
-            exit_code = proc.returncode
             raw = open(tmp_path).read()
 
-            if exit_code != 0:
+            if timed_out:
+                result    = f'Timeout: Job lief länger als {TIMEOUT_SEC//3600} Stunden.'
+                in_tok    = out_tok = cache_tok = 0
+                cost      = 0.0
+                status    = 'failed'
+                error     = f'Timeout nach {TIMEOUT_SEC//3600}h'
+            elif exit_code != 0:
                 first_line = raw.splitlines()[0] if raw.strip() else '(keine Ausgabe)'
                 result    = raw
                 in_tok    = out_tok = cache_tok = 0
@@ -375,7 +392,7 @@ try:
                 SELECT targetdate, 'sonnet', resume_session, prompt
                 FROM claude_pro_batch WHERE id=%s
             """, (job_id,))
-            new_id = db.lastrowid
+            new_id = cur.lastrowid
         db.commit()
         error  = f'Eskaliert zu Sonnet → Job #{new_id} (Bedenken erkannt)'
         status = 'failed'
@@ -409,6 +426,40 @@ try:
 
     print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id} → {status} "
           f"({in_tok}/{out_tok} tok, ${cost})", file=sys.stderr)
+
+    # ── OpenRouter Guthaben abrufen und speichern ─────────
+    if OPENROUTER_KEY:
+        try:
+            req = urllib.request.Request(
+                OPENROUTER_CREDITS,
+                headers={'Authorization': f'Bearer {OPENROUTER_KEY}'},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                cr        = json.loads(resp.read())['data']
+            total     = float(cr.get('total_credits', 0))
+            used      = float(cr.get('total_usage', 0))
+            remaining = round(total - used, 6)
+            bal_str   = f"${remaining:.4f} (von ${total:.2f} total, ${used:.6f} verbraucht)"
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] OpenRouter Guthaben: {bal_str}",
+                  file=sys.stderr)
+            # In ki_localhost_cache persistieren
+            with db.cursor() as cur:
+                for label, val in [
+                    ('balance_usd',       f"{remaining:.6f}"),
+                    ('total_credits_usd', f"{total:.2f}"),
+                    ('total_usage_usd',   f"{used:.6f}"),
+                    ('last_job_id',       str(job_id)),
+                    ('last_updated',      datetime.now().strftime('%Y-%m-%d %H:%M:%S')),
+                ]:
+                    cur.execute("""
+                        INSERT INTO ki_localhost_cache (category, label, value)
+                        VALUES ('openrouter', %s, %s)
+                        ON DUPLICATE KEY UPDATE value=%s, updated_at=NOW()
+                    """, (label, val, val))
+            db.commit()
+        except Exception as e:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] OpenRouter Guthaben Fehler: {e}",
+                  file=sys.stderr)
 
     # ── Session-Compact Cache aktualisieren ───────────────
     subprocess.run(
