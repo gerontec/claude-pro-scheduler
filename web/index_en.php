@@ -27,12 +27,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header("Location: ?msg=cancelled&job=$id");
         exit;
     }
-    if (isset($_POST['kill_job'])) {
-        $id = (int)$_POST['kill_job'];
-        $pdo->exec("UPDATE claude_pro_batch SET status='failed', error_msg='Killed' WHERE id=$id AND status='running'");
-        header("Location: ?msg=cancelled&job=$id");
-        exit;
-    }
     if (isset($_POST['delete_job'])) {
         $id = (int)$_POST['delete_job'];
         $pdo->exec("DELETE FROM claude_pro_batch WHERE id=$id AND status IN ('queued','done','failed')");
@@ -53,16 +47,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $msg = '';
 if (isset($_GET['msg'])) {
     match($_GET['msg']) {
-        'ok'          => $msg = ['success',   "Job #".htmlspecialchars($_GET['job'] ?? '')." queued &mdash; ".htmlspecialchars($_GET['date'] ?? '')." &mdash; ".htmlspecialchars($_GET['model'] ?? '')],
-        'err'         => $msg = ['danger',    'No prompt text entered.'],
-        'cancelled'   => $msg = ['warning',   "Job #".htmlspecialchars($_GET['job'] ?? '')." cancelled."],
-        'deleted'     => $msg = ['secondary', "Job #".htmlspecialchars($_GET['job'] ?? '')." deleted."],
-        'rescheduled' => $msg = ['info',      "Job #".htmlspecialchars($_GET['job'] ?? '')." rescheduled."],
-        default       => null,
+        'ok'        => $msg = ['success', "Job #".htmlspecialchars($_GET['job'] ?? '')." queued &mdash; ".htmlspecialchars($_GET['date'] ?? '')." &mdash; ".htmlspecialchars($_GET['model'] ?? '')],
+        'err'       => $msg = ['danger',  'No prompt text entered.'],
+        'cancelled' => $msg = ['warning', "Job #".htmlspecialchars($_GET['job'] ?? '')." cancelled."],
+        'deleted'      => $msg = ['secondary', "Job #".htmlspecialchars($_GET['job'] ?? '')." deleted."],
+        'rescheduled'  => $msg = ['info',  "Job #".htmlspecialchars($_GET['job'] ?? '')." re-queued."],
+        default     => null,
     };
 }
 
-// ── Data ───────────────────────────────────────────────────
+// ── Data ────────────────────────────────────────────────────
 $jobs = $pdo->query("
     SELECT id, created_at, targetdate, model, status,
            LEFT(prompt,100) AS prompt_short, prompt AS prompt_full,
@@ -124,7 +118,7 @@ $jsonCachTok= $usage['cache_tokens']    ?? null;
 $jsonCost   = $usage['cost_usd']        ?? null;
 $jsonTasks  = $usage['tasks']           ?? null;
 
-// ── Next Reset: Friday 08:00 Europe/Berlin ─────────────────
+// ── Next Reset: Friday 08:00 Europe/Berlin ────────────
 $tz        = new DateTimeZone('Europe/Berlin');
 $now       = new DateTime('now', $tz);
 $resetDay  = clone $now;
@@ -138,12 +132,12 @@ $secsLeft    = $resetDay->getTimestamp() - $now->getTimestamp();
 $daysLeft    = floor($secsLeft / 86400);
 $hoursLeft   = floor(($secsLeft % 86400) / 3600);
 $minsLeft    = floor(($secsLeft % 3600) / 60);
-$restCountdown = ($daysLeft > 0 ? "{$daysLeft}T " : '') . "{$hoursLeft}h {$minsLeft}m";
+$restCountdown = ($daysLeft > 0 ? "{$daysLeft}d " : '') . "{$hoursLeft}h {$minsLeft}m";
 $restPct     = ($usagePct !== null) ? max(0, 100 - $usagePct) : null;
 
 $hasActive = (bool)array_filter($jobs, fn($j) => in_array($j['status'], ['queued','running']));
 
-// ── Session-Compact Cache available? ──────────────────────────────────
+// ── Session Compact Cache available? ──────────────────────────────────
 $compact = $pdo->query("
     SELECT COALESCE(updated_at, created_at) AS ts, summary, version
     FROM claude_context_cache
@@ -162,13 +156,11 @@ if ($compact && $compact['ts']) {
     $compactSummaryHead = substr($compact['summary'] ?? '', 0, 120);
 }
 
-// ── Helper functions ───────────────────────────────────────
+// ── Helper Functions ────────────────────────────────────────
 function modelBadge($m) {
-    $map = ['sonnet'=>'primary','opus'=>'warning','xiaomi'=>'success','mimo-pro'=>'danger','qwen'=>'info'];
-    $labels = ['mimo-pro' => 'MiMo-Pro', 'qwen' => 'Qwen'];
+    $map = ['qwen'=>'info', 'xiaomi'=>'success','sonnet'=>'primary','opus'=>'warning'];
     $cls = $map[$m] ?? 'secondary';
-    $lbl = $labels[$m] ?? $m;
-    return "<span class=\"badge bg-$cls\">$lbl</span>";
+    return "<span class=\"badge bg-$cls\">$m</span>";
 }
 function statusBadge($s) {
     $map = ['queued'=>'warning','running'=>'info','done'=>'success','failed'=>'danger'];
@@ -218,6 +210,7 @@ body { background:#0d1117; }
 </head>
 <body>
 
+<!-- ── Navigation Bar ── -->
 <nav class="navbar navbar-dark" style="background:#161b22;border-bottom:1px solid #30363d">
     <div class="container-fluid">
         <span class="navbar-brand">
@@ -234,6 +227,7 @@ body { background:#0d1117; }
 
 <div class="container-fluid py-3 px-3 px-md-4" style="max-width:1300px">
 
+<!-- ── Alert Messages ── -->
 <?php if ($msg): ?>
 <div class="alert alert-<?= $msg[0] ?> alert-dismissible fade show" role="alert">
     <i class="bi bi-<?= $msg[0]==='success'?'check-circle':'exclamation-triangle' ?> me-2"></i><?= $msg[1] ?>
@@ -243,23 +237,21 @@ body { background:#0d1117; }
 
 <!-- ── New Job ── -->
 <div class="card mb-3">
-    <div class="card-header"><i class="bi bi-plus-circle me-1"></i>Queue New Batch Job</div>
+    <div class="card-header"><i class="bi bi-plus-circle me-1"></i>Submit New Batch Job</div>
     <div class="card-body">
         <form method="POST">
             <div class="row g-3">
                 <div class="col-12 col-sm-5 col-md-3">
                     <label class="form-label small text-muted text-uppercase">Target Date</label>
                     <input type="date" class="form-control" name="targetdate"
-                           value="<?= date('Y-m-d', strtotime('+1 day')) ?>" min="<?= date('Y-m-d') ?>">
+                           value="<?= date('Y-m-d') ?>" min="<?= date('Y-m-d') ?>">
                 </div>
                 <div class="col-12 col-sm-7 col-md-3">
                     <label class="form-label small text-muted text-uppercase">Model</label>
                     <select class="form-select" name="model">
                         <option value="qwen" selected>🟢 Qwen — Free, unlimited</option>
-                        <option value="xiaomi">🟢 Xiaomi MiMo — Free (OpenRouter)</option>
-                        <option value="mimo-pro">🔴 Xiaomi MiMo V2 Pro (OpenRouter)</option>
-                        <option value="sonnet">🔵 Sonnet — Abo-Limit (~4×)</option>
-                        <option value="opus">🟣 Opus — Abo-Limit (~19×)</option>
+                        <option value="sonnet">🔵 Sonnet — Complex (~4×)</option>
+                        <option value="opus">🟣 Opus — Maximum (~19×)</option>
                     </select>
                 </div>
                 <div class="col-12 col-sm-auto d-flex align-items-end pb-1">
@@ -292,20 +284,20 @@ body { background:#0d1117; }
             </div>
             <div class="mt-3 d-flex align-items-center gap-3 flex-wrap">
                 <button class="btn btn-primary" name="submit_job">
-                    <i class="bi bi-send me-1"></i>Queue Job
+                    <i class="bi bi-send me-1"></i>Submit Job
                 </button>
-                <small class="text-muted">Starts immediately &nbsp;|&nbsp; Target date = deadline (earliest deadline first)</small>
+                <small class="text-muted">Start: immediately | Target Date = Deadline (next deadline first)</small>
             </div>
         </form>
     </div>
 </div>
 
-<!-- ── Job List ── -->
+<!-- ── Job Queue ── -->
 <div class="card mb-3">
     <div class="card-header d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-list-task me-1"></i>Jobs (last 50)</span>
+        <span><i class="bi bi-list-task me-1"></i>Job Queue (last 50)</span>
         <?php if ($hasActive): ?>
-        <span class="text-info small"><i class="bi bi-arrow-repeat spinner me-1"></i>Auto-refresh 30s</span>
+        <span class="text-info small"><i class="bi bi-arrow-repeat spinner me-1"></i>Auto-Refresh 30s</span>
         <?php endif; ?>
     </div>
     <div class="card-body p-0">
@@ -361,13 +353,6 @@ body { background:#0d1117; }
                             <i class="bi bi-x"></i>
                         </button>
                     </form>
-                    <?php elseif ($j['status'] === 'running'): ?>
-                    <form method="POST" class="d-inline"
-                          onsubmit="return confirm('Kill job #<?= $j['id'] ?>?')">
-                        <button class="btn btn-sm btn-outline-danger py-0" name="kill_job" value="<?= $j['id'] ?>">
-                            <i class="bi bi-stop-circle"></i>
-                        </button>
-                    </form>
                     <?php elseif ($j['status'] === 'failed'): ?>
                     <form method="POST" class="d-inline">
                         <button class="btn btn-sm btn-outline-warning py-0"
@@ -378,7 +363,7 @@ body { background:#0d1117; }
                     <?php endif; ?>
                     <?php if ($j['status'] !== 'running'): ?>
                     <form method="POST" class="d-inline"
-                          onsubmit="return confirm('Delete job #<?= $j['id'] ?>?')">
+                          onsubmit="return confirm('Delete Job #<?= $j['id'] ?>?')">
                         <button class="btn btn-sm btn-outline-danger py-0 ms-1"
                                 name="delete_job" value="<?= $j['id'] ?>">
                             <i class="bi bi-trash"></i>
@@ -397,7 +382,7 @@ body { background:#0d1117; }
             <?php endforeach; ?>
             <?php if (empty($jobs)): ?>
             <tr><td colspan="9" class="text-center py-4 text-muted">
-                <i class="bi bi-inbox fs-3 d-block mb-2"></i>No jobs yet. Queue your first job above.
+                <i class="bi bi-inbox fs-3 d-block mb-2"></i>No jobs yet. Submit one above.
             </td></tr>
             <?php endif; ?>
             </tbody>
@@ -412,7 +397,7 @@ body { background:#0d1117; }
         <span><i class="bi bi-speedometer2 me-1"></i>Claude Pro Weekly Usage</span>
         <span class="text-muted small">
             <?php if ($pctSnap): ?>
-                <i class="bi bi-clock me-1"></i>Snapshot: <?= htmlspecialchars($pctSnap) ?>
+                <i class="bi bi-clock me-1"></i>As of: <?= htmlspecialchars($pctSnap) ?>
             <?php elseif ($lastRun): ?>
                 <i class="bi bi-clock me-1"></i>Last run: <?= htmlspecialchars($lastRun) ?>
             <?php endif; ?>
@@ -420,7 +405,7 @@ body { background:#0d1117; }
     </div>
     <div class="card-body">
 
-        <!-- ── Two limits side by side ── -->
+        <!-- ── Two Limits Side-by-Side ── -->
         <?php
         $wColor = $usagePct  >= 90 ? 'danger' : ($usagePct  >= 70 ? 'warning' : 'success');
         $sColor = $sessionPct >= 90 ? 'danger' : ($sessionPct >= 70 ? 'warning' : 'info');
@@ -502,62 +487,50 @@ body { background:#0d1117; }
 
         </div>
 
-        <?php
-        // ── OpenRouter Credits ──
-        $orFile = '/home/gh/.openrouter_credits.json';
-        $orData = null;
-        if (file_exists($orFile)) {
-            $orData = json_decode(file_get_contents($orFile), true);
-        }
-        if ($orData && $orData['total_credits'] > 0):
-            $orBalance = $orData['balance'];
-            $orPct     = $orData['pct_used'];
-            $orColor   = $orPct >= 90 ? 'danger' : ($orPct >= 70 ? 'warning' : 'success');
-        ?>
-        <div class="row g-3 mb-3">
-            <div class="col-12 col-md-6">
-                <div class="stat-card h-100">
-                    <div class="d-flex justify-content-between align-items-baseline mb-2">
-                        <span class="stat-lbl mb-0"><i class="bi bi-cloud me-1"></i>OpenRouter Balance</span>
-                        <span class="fw-bold text-<?= $orColor ?>">$<?= number_format($orBalance, 2) ?></span>
-                    </div>
-                    <div class="progress mb-2" style="height:22px;background:#21262d">
-                        <div class="progress-bar bg-<?= $orColor ?>"
-                             style="width:<?= min($orPct,100) ?>%;font-size:.8rem;line-height:22px">
-                            <?php if ($orPct > 8): ?><?= number_format($orPct, 1) ?>%<?php endif; ?>
-                        </div>
-                    </div>
-                    <div class="d-flex justify-content-between">
-                        <small class="text-muted">
-                            <i class="bi bi-cash-stack me-1"></i>Spent: <strong class="text-light">$<?= number_format($orData['total_usage'], 4) ?></strong>
-                            / $<?= number_format($orData['total_credits'], 2) ?> loaded
-                        </small>
-                        <small class="text-muted">
-                            <i class="bi bi-arrow-clockwise me-1"></i><?= htmlspecialchars($orData['fetched_at'] ?? '') ?>
-                        </small>
-                    </div>
-                    <div class="mt-1 text-end">
-                        <small class="text-<?= $orColor ?> fw-bold"><?= number_format(100 - $orPct, 1) ?>% remaining</small>
-                    </div>
-                </div>
-            </div>
+        <?php if ($usagePct === null): ?>
+        <div class="alert alert-secondary py-2 small mb-3">
+            <i class="bi bi-info-circle me-1"></i>
+            Percentage values pending — <code>fetch-usage.py</code> runs every 30 min (Cron).
         </div>
         <?php endif; ?>
 
-        <p class="text-muted small mb-0">
-            <i class="bi bi-clock me-1"></i>
-            <?php if ($pctSnap): ?>
-                Last snapshot: <strong class="text-light"><?= htmlspecialchars($pctSnap) ?></strong>
-            <?php elseif ($lastRun): ?>
-                Last run: <strong class="text-light"><?= htmlspecialchars($lastRun) ?></strong>
-            <?php else: ?>
-                No snapshot yet — <code>fetch-usage.py</code> has not run yet.
-            <?php endif; ?>
-        </p>
+        <!-- ── Token Statistics from usage JSON ── -->
+        <?php if ($jsonInTok !== null): ?>
+        <div class="row g-2 mb-2">
+            <div class="col-6 col-sm-3">
+                <div class="stat-card">
+                    <div class="stat-lbl">Total Cost</div>
+                    <div class="stat-val text-warning">$<?= number_format($jsonCost,4) ?></div>
+                    <div class="stat-sub"><?= $jsonTasks ?> tasks total</div>
+                </div>
+            </div>
+            <div class="col-6 col-sm-3">
+                <div class="stat-card">
+                    <div class="stat-lbl">Input Tokens</div>
+                    <div class="stat-val text-primary"><?= number_format($jsonInTok) ?></div>
+                    <div class="stat-sub">direct input</div>
+                </div>
+            </div>
+            <div class="col-6 col-sm-3">
+                <div class="stat-card">
+                    <div class="stat-lbl">Output Tokens</div>
+                    <div class="stat-val text-success"><?= number_format($jsonOutTok) ?></div>
+                    <div class="stat-sub">generated</div>
+                </div>
+            </div>
+            <div class="col-6 col-sm-3">
+                <div class="stat-card">
+                    <div class="stat-lbl">Cache Tokens</div>
+                    <div class="stat-val" style="color:#bc8cff"><?= number_format($jsonCachTok) ?></div>
+                    <div class="stat-sub">reused</div>
+                </div>
+            </div>
+        </div>
+        <p class="text-muted small mb-0"><i class="bi bi-info-circle me-1"></i>Cumulative from <code>~/.claude_weekly_usage.json</code> — all jobs this week.</p>
+        <?php endif; ?>
 
     </div>
 </div>
-
 
 <!-- ── Statistics Report ── -->
 <div class="card mb-3">
@@ -565,10 +538,10 @@ body { background:#0d1117; }
     <div class="card-body">
         <div class="row g-4">
             <div class="col-12 col-md-6">
-                <div class="text-muted small text-uppercase mb-2" style="letter-spacing:.5px">Usage by model</div>
+                <div class="text-muted small text-uppercase mb-2" style="letter-spacing:.5px">Usage by Model</div>
                 <?php
                 $maxC = max(array_column($modelStats, 'cost') ?: [0.0001]);
-                $cols = ['qwen'=>'#3fb950','sonnet'=>'#58a6ff','opus'=>'#bc8cff','xiaomi'=>'#f0883e','mimo-pro'=>'#f85149'];
+                $cols = ['qwen'=>'#3fb950', 'xiaomi'=>'#f0883e', 'mimo-pro'=>'#f85149','sonnet'=>'#58a6ff','opus'=>'#bc8cff'];
                 foreach ($modelStats as $m):
                     $pct = $maxC > 0 ? round($m['cost']/$maxC*100) : 1;
                 ?>
@@ -582,13 +555,13 @@ body { background:#0d1117; }
                 <span class="text-muted small">No completed jobs yet.</span>
                 <?php endif; ?>
                 <div class="mt-3 pt-2 border-top small text-muted">
-                    Total: <strong class="text-light"><?= $totals['tasks'] ?> tasks</strong> &mdash;
+                    Total: <strong class="text-light"><?= $totals['tasks'] ?> Tasks</strong> &mdash;
                     <strong class="text-warning">$<?= number_format($totals['cost'],4) ?></strong> &mdash;
-                    <strong class="text-success"><?= number_format($totals['o_tok']) ?></strong> output tokens
+                    <strong class="text-success"><?= number_format($totals['o_tok']) ?></strong> Output Tokens
                 </div>
             </div>
             <div class="col-12 col-md-6">
-                <div class="text-muted small text-uppercase mb-2" style="letter-spacing:.5px">Daily cost (last 7 days)</div>
+                <div class="text-muted small text-uppercase mb-2" style="letter-spacing:.5px">Daily Costs (last 7 days)</div>
                 <?php
                 $maxD = max(array_column($dailyStats, 'cost') ?: [0.0001]);
                 foreach ($dailyStats as $d):
@@ -601,7 +574,7 @@ body { background:#0d1117; }
                 </div>
                 <?php endforeach; ?>
                 <?php if (empty($dailyStats)): ?>
-                <span class="text-muted small">No data for the last 7 days.</span>
+                <span class="text-muted small">No data from the last 7 days.</span>
                 <?php endif; ?>
             </div>
         </div>
@@ -616,7 +589,7 @@ body { background:#0d1117; }
         <table class="table table-hover mb-0">
             <thead><tr>
                 <th>Model</th><th>Input / MTok</th><th>Cache Read / MTok</th><th>Output / MTok</th>
-                <th>Cost / Job</th><th class="hide-mobile">Use case</th>
+                <th>Cost / Job</th><th class="hide-mobile">Use Case</th>
             </tr></thead>
             <tbody>
                 <tr>
@@ -663,14 +636,8 @@ $cacheEntry = $pdo->query("
     SELECT context_json, COALESCE(updated_at,created_at) AS ts, version, updated_by
     FROM claude_context_cache WHERE scope='session-compact' LIMIT 1
 ")->fetch(PDO::FETCH_ASSOC);
-$cacheDecoded   = json_decode($cacheEntry['context_json'], true);
-$cacheSummary   = $cacheDecoded['summary'] ?? $cacheEntry['context_json'];
-$cacheSource    = $cacheDecoded['source']        ?? null;
-$cacheGithub    = $cacheDecoded['github_url']    ?? null;
-$cacheGenAt     = $cacheDecoded['generated_at']  ?? ($cacheDecoded['compacted_at'] ?? null);
-$cacheSessionId = $cacheDecoded['session_id']    ?? null;
-$cacheJobs      = $cacheDecoded['jobs_included'] ?? null;
-$cacheNewest    = $cacheDecoded['newest_job_id'] ?? null;
+$cacheDecoded = json_decode($cacheEntry['context_json'], true);
+$cacheSummary = $cacheDecoded['summary'] ?? $cacheEntry['context_json'];
 ?>
 <div class="modal fade" id="cacheModal" tabindex="-1">
     <div class="modal-dialog modal-xl modal-dialog-scrollable">
@@ -685,7 +652,7 @@ $cacheNewest    = $cacheDecoded['newest_job_id'] ?? null;
                         <i class="bi bi-clipboard me-1"></i>Copy
                     </button>
                     <a href="view_cache.php?scope=session-compact" class="btn btn-sm btn-outline-secondary" target="_blank">
-                        <i class="bi bi-box-arrow-up-right me-1"></i>Full view
+                        <i class="bi bi-box-arrow-up-right me-1"></i>Full View
                     </a>
                 </div>
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -694,20 +661,7 @@ $cacheNewest    = $cacheDecoded['newest_job_id'] ?? null;
                 <div class="px-3 py-2" style="background:#1c2128;border-bottom:1px solid #30363d;font-size:.75rem">
                     <span class="text-muted me-3"><i class="bi bi-clock me-1"></i><?= htmlspecialchars($cacheEntry['ts']) ?></span>
                     <span class="text-muted me-3"><i class="bi bi-person me-1"></i><?= htmlspecialchars($cacheEntry['updated_by'] ?? '–') ?></span>
-                    <span class="text-muted me-3"><i class="bi bi-file-text me-1"></i><?= number_format(strlen($cacheSummary)) ?> chars</span>
-                    <?php if ($cacheJobs !== null): ?>
-                    <span class="text-muted me-3"><i class="bi bi-list-check me-1"></i><?= (int)$cacheJobs ?> Jobs (bis #<?= (int)$cacheNewest ?>)</span>
-                    <?php elseif ($cacheSessionId): ?>
-                    <span class="text-muted me-3"><i class="bi bi-key me-1"></i><?= htmlspecialchars(substr($cacheSessionId,0,8)) ?>…</span>
-                    <?php endif; ?>
-                    <?php if ($cacheGenAt): ?>
-                    <span class="text-muted me-3"><i class="bi bi-arrow-clockwise me-1"></i><?= htmlspecialchars(substr($cacheGenAt,0,16)) ?></span>
-                    <?php endif; ?>
-                    <?php if ($cacheGithub): ?>
-                    <a href="<?= htmlspecialchars($cacheGithub) ?>" target="_blank" class="text-info text-decoration-none">
-                        <i class="bi bi-github me-1"></i>Repo
-                    </a>
-                    <?php endif; ?>
+                    <span class="text-muted"><i class="bi bi-file-text me-1"></i><?= number_format(strlen($cacheSummary)) ?> characters</span>
                 </div>
                 <pre id="cache-text" style="background:#0d1117;color:#e6edf3;font-size:.76rem;
                      font-family:'SFMono-Regular',Consolas,monospace;padding:1rem;

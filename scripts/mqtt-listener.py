@@ -35,7 +35,7 @@ KEEPALIVE   = 60
 DB_CFG = dict(host="localhost", user="gh", password="a12345", database="wagodb",
               charset="utf8mb4", cursorclass=pymysql.cursors.DictCursor)
 
-VALID_MODELS = {"haiku", "sonnet", "opus", "xiaomi", "mimo-pro"}
+VALID_MODELS = {"sonnet", "opus", "xiaomi", "mimo-pro", "qwen"}
 
 logging.basicConfig(
     level=logging.INFO,

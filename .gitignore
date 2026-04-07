@@ -1,0 +1,9 @@
+*.key
+*.pem
+.env
+.env.local
+*.log
+openrouter.key
+.claude_weekly_usage.json
+__pycache__/
+*.pyc

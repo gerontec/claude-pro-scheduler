@@ -80,7 +80,7 @@ done; wait
 |-----------|------------------------------------------------|-------------|
 | xiaomi    | Standard-Sub-Agent: Analyse, Lookup, Texte     | ~$0.0005/Job|
 | mimo-pro  | Komplexes Reasoning, lange Dokumente           | ~$0.01/Job  |
-| haiku     | Claude-Qualität, kein Tool-Zugriff nötig       | Abo-Limit   |
+| qwen      | Alibaba, kostenlos, lokal                       | 0$          |
 | sonnet    | Hohe Qualität + Tool-Zugriff via Claude CLI    | Abo-Limit   |
 
 **Faustregel:** Textaufgabe → xiaomi | Komplex → mimo-pro | Tool/Datei → selbst erledigen

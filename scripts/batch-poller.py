@@ -25,6 +25,7 @@ USAGE_FILE       = '/home/gh/.claude_weekly_usage.json'
 LOCK             = '/tmp/claude-pro-poller.lock'
 MAX_RUNNING      = 9
 CLAUDE_BIN       = '/usr/local/bin/claude'
+QWEN_BIN         = '/usr/bin/qwen'
 OPENROUTER_URL      = 'https://openrouter.ai/api/v1/chat/completions'
 OPENROUTER_CREDITS  = 'https://openrouter.ai/api/v1/credits'
 # OpenRouter-Modelle: job.model → OpenRouter-ID
@@ -46,6 +47,34 @@ SYSTEM_PROMPT_BASE = (
     "2. `ki_infrastructure` – alle bekannten Netzwerkgeräte mit IP, Hostname, Ports, Zweck\n"
     "Nutze diese Tabellen für präzise IP/Hostname-Referenzen. "
     "Verwende niemals erfundene IPs – nur Werte aus dem Kontext.\n\n"
+    "## SSH-Zugriff (passwordlos)\n"
+    "Alle bekannten Nodes sind vom Batch-Server passwordlos per SSH erreichbar "
+    "(authorized_keys hinterlegt). Du kannst direkt ssh/scp nutzen:\n"
+    "  ssh pi@10.8.0.2 'command'                    # Raspberry Pi via VPN (PV-Regelung)\n"
+    "  ssh gh@heissa.de 'command'                    # Hauptserver heissa.de (public 74.208.77.214)\n"
+    "  ssh pi@192.168.178.218 'command'              # Pi MQTT/DB im LAN\n"
+    "  ssh -p 8022 u0_a139@192.168.178.43 'command' # Kodi TV (Android/Termux, Port 8022)\n"
+    "Welcher User: steht in ki_infrastructure (services-Spalte).\n\n"
+    "## VPN-Mapping\n"
+    "  10.8.0.1  = heissa.de intern (VPN-Server für 10.8.0.0/24, public: 74.208.77.214)\n"
+    "  10.8.0.2  = Raspberry Pi (PV-Regelung, Tuya, Zenner, Ebyte)\n"
+    "  10.9.0.1  = VPN-Server (OpenVPN-Gegenstelle dieses Batch-Servers)\n"
+    "  10.9.0.2  = dieser Batch-Server (pve.heissa.de, 192.168.5.23) im VPN\n"
+    "  2a02:810d:4117:73fd::23 = dieser Batch-Server per IPv6 (extern erreichbar, alle Ports offen)\n"
+    "  74.208.77.214  = heissa.de public (Mail, Web, bind9, MariaDB wagodb)\n"
+    "  82.165.41.91   = yt.heissa.de (TubeArchivist)\n"
+    "  178.25.117.246 = kellertreppe.heissa.de / oc.heissa.de (Nextcloud)\n\n"
+    "## Datenbank-Zugriff\n"
+    "Lokal (dieser Server):  mysql -u gh -p wagodb -e 'SQL'\n"
+    "Remote wagodb (heissa.de via VPN): mysql -h 10.8.0.1 -u gh -p wagodb -e 'SQL'\n"
+    "Python lokal: pymysql.connect(host='localhost', user='gh', password=DB_PASS, database='wagodb')\n"
+    "Python remote: pymysql.connect(host='10.8.0.1', user='gh', password=DB_PASS, database='wagodb')\n"
+    "Wichtige Tabellen: ki_infrastructure, ki_localhost_cache, claude_pro_batch, "
+    "meterbus (Zenner), sofar_pivot (PV), ebyte4ai (Modbus-I/O).\n"
+    "Lese- und Schreibrechte vollständig (INSERT/UPDATE/DELETE erlaubt).\n\n"
+    "## SMTP-Mailversand\n"
+    "Mailserver: 10.8.0.1, Port 25, kein Auth. From: gh@heissa.de\n"
+    "python3: smtplib.SMTP('10.8.0.1', 25).sendmail('gh@heissa.de', ['empfaenger@heissa.de'], msg)\n\n"
     "## Cache-Hinweis\n"
     "Dieser System-Prompt ist identisch für alle Jobs (→ Prompt-Cache aktiv). "
     "Job-spezifische Infos (Deadline, Aufgabe) stehen im User-Message-Suffix."
@@ -284,7 +313,54 @@ try:
     pre_in, pre_out, pre_cache, pre_cost, pre_tasks = load_usage()
 
     # ── Modell ausführen ─────────────────────────────────
-    if model in OPENROUTER_MODELS:
+    if model == 'qwen':
+        # ── Qwen CLI (kostenlos, kein Limit) ──────────
+        TIMEOUT_SEC = 2 * 3600  # 2 Stunden
+        timed_out   = False
+
+        try:
+            proc = subprocess.run(
+                [
+                    QWEN_BIN,
+                    '--yolo',
+                    '--append-system-prompt', system_prompt,
+                    prompt,
+                ],
+                input='',
+                capture_output=True,
+                text=True,
+                timeout=TIMEOUT_SEC,
+            )
+            exit_code = proc.returncode
+            raw       = proc.stdout.strip()
+        except subprocess.TimeoutExpired:
+            raw       = ''
+            timed_out = True
+            exit_code = -1
+
+        if timed_out:
+            result    = f'Timeout: Qwen-Job lief länger als {TIMEOUT_SEC//3600} Stunden.'
+            in_tok    = out_tok = cache_tok = 0
+            cost      = 0.0
+            status    = 'failed'
+            error     = f'Timeout nach {TIMEOUT_SEC//3600}h'
+        elif exit_code != 0:
+            result    = raw if raw else proc.stderr.strip()
+            in_tok    = out_tok = cache_tok = 0
+            cost      = 0.0
+            status    = 'failed'
+            error     = f'Exit-Code {exit_code}: {result[:200]}'
+        else:
+            result    = raw
+            in_tok    = out_tok = cache_tok = 0
+            cost      = 0.0
+            status    = 'done'
+            error     = ''
+
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: "
+              f"Qwen {'OK' if status == 'done' else 'FEHLER'} (exit={exit_code})", file=sys.stderr)
+
+    elif model in OPENROUTER_MODELS:
         # ── OpenRouter (Xiaomi MiMo / MiMo-Pro / …) ──
         try:
             r         = run_openrouter(prompt, system_prompt, OPENROUTER_MODELS[model])
@@ -305,7 +381,7 @@ try:
             error     = f'OpenRouter Fehler: {exc}'
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: {error}", file=sys.stderr)
     else:
-        # ── Claude CLI (haiku / sonnet / opus) ────────
+        # ── Claude CLI (sonnet / opus) ────────────────
         with tempfile.NamedTemporaryFile(prefix=f'claude_pro_{job_id}_',
                                          suffix='.json', delete=False) as tmp:
             tmp_path = tmp.name

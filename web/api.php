@@ -37,7 +37,7 @@ $pdo = new PDO(
      PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
 );
 
-$VALID_MODELS = ['haiku','sonnet','opus','xiaomi','mimo-pro'];
+$VALID_MODELS = ['sonnet','opus','xiaomi','mimo-pro','qwen'];
 
 // ── POST → submit job ─────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {

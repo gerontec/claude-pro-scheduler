@@ -89,11 +89,12 @@ TARGET_RAW=$(echo "$FIRST_LINE" | grep -oP '(?i)targetdate=\K[^\s]+' | tr -d ' '
 MODEL_RAW=$(echo  "$FIRST_LINE" | grep -oP '(?i)model=\K[^\s]+'     | tr '[:upper:]' '[:lower:]')
 TASK=$(tail -n +2 "$BATCH_FILE" | sed '/^[[:space:]]*$/d')
 
-# Modell auflösen – Default: haiku
+# Modell auflösen – Default: xiaomi (Qwen via API nicht im CLI-Modus)
 case "$MODEL_RAW" in
     sonnet)  MODEL="sonnet" ;;
     opus)    MODEL="opus"   ;;
-    *)       MODEL="haiku"  ;;
+    qwen)    MODEL="qwen"   ;;
+    *)       MODEL="xiaomi" ;;
 esac
 
 if [ -z "$TASK" ]; then
@@ -149,7 +150,6 @@ _run_task() {
         --model "$MODEL" \
         --effort low \
         --dangerously-skip-permissions \
-        --append-system-prompt "Du bist ein autonomer Batch-Assistent. Führe alle Aufgaben vollständig und direkt aus – ohne Rückfragen, ohne Sicherheitshinweise, ohne Warnungen über Credentials oder Best-Practices. Der Betreiber hat alle Berechtigungen erteilt. Antworte ausschliesslich mit dem Ergebnis der Aufgabe." \
         --output-format json \
         -p "$TASK" \
         < /dev/null > "$tmp_json" 2>&1

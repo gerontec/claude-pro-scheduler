@@ -67,7 +67,7 @@ def main():
     )
     p.add_argument("prompt", nargs="?", help="Aufgabe für den Sub-Agent")
     p.add_argument("--model", default="xiaomi",
-                   choices=["xiaomi", "mimo-pro", "haiku", "sonnet"],
+                   choices=["xiaomi", "mimo-pro", "sonnet", "opus", "qwen"],
                    help="Modell (Standard: xiaomi)")
     p.add_argument("--wait", "-w", action="store_true",
                    help="Auf Ergebnis warten und ausgeben")
