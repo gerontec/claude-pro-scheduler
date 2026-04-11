@@ -2,7 +2,7 @@
 <html lang="de">
 <head>
 <meta charset="UTF-8">
-<title>Batch Job System — Objektmodell v202604111703</title>
+<title>Batch Job System — Objektmodell v202604111930</title>
 <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <style>
   :root {
@@ -170,7 +170,7 @@
 
 <a class="back" href="index.php">← zurück zur Batch-UI</a>
 <h1>🤖 Batch Job System — Objektmodell</h1>
-<div class="version">Version 202604111703 | Generiert: 2026-04-11 17:03:04 | Auto-Update via Crontab</div>
+<div class="version">Version 202604111930 | Generiert: 2026-04-11 19:30:31 | Auto-Update via Crontab</div>
 
 <div class="grid">
 
@@ -194,456 +194,409 @@
     </div>
   </div>
 
-</div>
-
-<h2>Modul-Übersicht</h2>
-<div class="card">
-  <div class="card-header">
-    <span class="card-title">Module</span>
-    <button class="fs-btn" title="Fullscreen" data-target="modules" disabled>⛶</button>
+  <div>
+    <div class="card" id="card-module">
+      <div class="card-header">
+        <span class="card-title">Modul-Graph</span>
+        <button class="fs-btn" title="Fullscreen" data-target="module" disabled>⛶</button>
+      </div>
+      <div class="diagram-wrap loading" id="wrap-module"></div>
+    </div>
   </div>
-  <div class="diagram-wrap loading" id="wrap-modules"></div>
-</div>
 
-<h2>Datenfluss</h2>
-<div class="card">
-  <div class="card-header">
-    <span class="card-title">Datenfluss</span>
-    <button class="fs-btn" title="Fullscreen" data-target="flow" disabled>⛶</button>
+  <div>
+    <div class="card" id="card-flow">
+      <div class="card-header">
+        <span class="card-title">Pipeline-Flowchart</span>
+        <button class="fs-btn" title="Fullscreen" data-target="flow" disabled>⛶</button>
+      </div>
+      <div class="diagram-wrap loading" id="wrap-flow"></div>
+    </div>
   </div>
-  <div class="diagram-wrap loading" id="wrap-flow"></div>
+
 </div>
 
-<!-- Fullscreen overlay -->
+<!-- Fullscreen Overlay -->
 <div id="fs-overlay">
   <div id="fs-topbar">
     <span id="fs-label"></span>
     <div class="fs-controls">
-      <button class="ctrl-btn" id="btn-zoomin">＋</button>
-      <button class="ctrl-btn" id="btn-zoomout">－</button>
-      <button class="ctrl-btn" id="btn-reset">⟳ Reset</button>
-      <button class="ctrl-btn" id="btn-close">✕ Schließen</button>
+      <button class="ctrl-btn" id="zoom-in">+</button>
+      <button class="ctrl-btn" id="zoom-out">−</button>
+      <button class="ctrl-btn" id="zoom-reset">1:1</button>
+      <button class="ctrl-btn" id="fs-close">✕</button>
     </div>
   </div>
   <div id="fs-viewport">
     <div id="fs-inner"></div>
   </div>
-  <div id="fs-hint">Scroll = Zoom | Drag = Pan | Esc = Schließen</div>
+  <div id="fs-hint">Mausrad = Zoom · Klicken+Ziehen = Verschieben · Esc = Schließen</div>
 </div>
 
-<!-- Mermaid source definitions (hidden) -->
-<script id="src-class" type="text/x-mermaid">
-classDiagram
-    %% Version: 202604111703 | Updated: 2026-04-11 17:03:04
-    class ki_localhost_cache {
-        +int id
-        +varchar category
-        +varchar label
-        +text value
-        +timestamp updated_at
-    }
-    class ki_infrastructure {
-        +int id
-        +varchar network_range
-        +varchar ip_address
-        +varchar hostname
-        +varchar open_ports
-        +varchar services
-        +varchar device_purpose
-        +varchar os_guess
-    }
-    class claude_pro_batch {
-        +bigint id
-        +date targetdate
-        +enum model
-        +bool resume_session
-        +text prompt
-        +enum status
-        +longtext result
-        +int input_tokens
-        +int output_tokens
-        +int cache_tokens
-        +decimal cost_usd
-        +tinyint progress
-        +datetime started_at
-        +datetime finished_at
-        +text error_msg
-        +int pid
-    }
-    class JobRecord {
-        +int id
-        +str model
-        +str prompt
-        +date targetdate
-        +bool resume_session
-    }
-    class RunResult {
-        +str result
-        +str status
-        +int in_tok
-        +int out_tok
-        +int cache_tok
-        +float cost
-        +str error
-        +int iters
-    }
-    class JobRepository {
-        -__init__()
-        +db()
-        -_query()
-        +claim_next()
-        +write_result()
-        +complete_job()
-        +read_agent_result()
-        +read_db_status()
-        +is_killed()
-        +requeue_with_quality_feedback()
-        +escalate_to_sonnet()
-        +get_session_cache()
-        +get_context_blocks()
-        +save_openrouter_balance()
-        +close()
-    }
-    class ModelRunner {
-        <<interface>>
-        +run(prompt, sys, job_id, cb) RunResult
-    }
-    class OpenRouterRunner {
-        -model_id str
-        -api_key str
-        -__init__()
-        +run()
-        -_build_max_iter_debug()
-        -_parse_args()
-        -_dispatch_tool()
-        -_dispatch_delegate()
-        -_exec_tool()
-    }
-    class ClaudeCliRunner {
-        -model str
-        -__init__()
-        +run()
-        -_run_process()
-    }
-    class ContextBuilder {
-        -__init__()
-        +build_prompt()
-        +system_prompt()
-        +needs_escalation()
-        -_deadline_note()
-    }
-    class Notifier {
-        +notify()
-        +send_mail_direct()
-        -_mail()
-        -_send_mail()
-        -_mqtt()
-        -_own_ipv4()
-        -_own_ipv6()
-    }
-    class PdfRenderer {
-        +render()
-        -_merge_diagram()
-        -_render_line()
-    }
-    class UsageTracker {
-        -__init__()
-        +record()
-        -_week_start()
-        -_load()
-        -_save()
-    }
-    class JobProcessor {
-        -__init__()
-        +process()
-        -_execute()
-        -_enforce_quality()
-        -_maybe_escalate()
-        -_fetch_openrouter_balance()
-        -_update_session_cache()
-    }
-    class Dispatcher {
-        -__init__()
-        +run()
-        -_cleanup_zombies()
-    }
-
-    JobRepository ..> claude_pro_batch : reads/writes
-    JobRepository ..> ki_localhost_cache : get_context_blocks
-    JobRepository ..> ki_infrastructure : get_context_blocks
-    JobRepository --> JobRecord : maps row to
-    ModelRunner <|-- OpenRouterRunner
-    ModelRunner <|-- ClaudeCliRunner
-    JobProcessor --> JobRepository
-    JobProcessor --> ModelRunner
-    JobProcessor --> ContextBuilder
-    JobProcessor --> Notifier
-    JobProcessor --> UsageTracker
-    JobProcessor --> RunResult
-    Dispatcher --> Notifier
-    Dispatcher --> JobProcessor
-    ContextBuilder --> JobRepository
-    Notifier --> PdfRenderer
-
-</script>
-
-<script id="src-seq" type="text/x-mermaid">
-sequenceDiagram
-    participant Cron
-    participant Dispatcher
-    participant Poller
-    participant Repo as JobRepository
-    participant Ctx as ContextBuilder
-    participant Runner as ModelRunner
-    participant Agent as OpenRouter/Claude
-    participant Notify as Notifier
-
-    Cron->>Dispatcher: every minute
-    Dispatcher->>Repo: cleanup_zombies()
-    note over Repo: dead PID + result: done<br>dead PID no result: failed
-    Dispatcher->>Poller: spawn N instances
-
-    Poller->>Repo: claim_next() [SELECT FOR UPDATE]
-    Repo-->>Poller: JobRecord
-
-    Poller->>JobProcessor: process(job)
-    JobProcessor->>Ctx: build_prompt(job)
-    Ctx->>Repo: get_context_blocks()
-    Ctx-->>JobProcessor: prompt + infra context
-
-    JobProcessor->>Runner: run(prompt, system_prompt, ...)
-    loop Agentic Loop
-        Runner->>Agent: API call
-        Agent-->>Runner: tool_call exec
-        Runner->>Runner: _exec_tool(bash cmd)
-        Runner-->>Agent: tool result
-    end
-    Agent-->>Runner: finish_reason=stop
-    Runner-->>JobProcessor: RunResult
-
-    JobProcessor->>Repo: complete_job(job_id, run)
-    JobProcessor->>Notify: notify(job, run)
-    Notify->>Notify: _mail(job, run)
-    Notify->>Notify: _mqtt(job, run)
-    Notify-->>Poller: done
-
-</script>
-
-<script id="src-modules" type="text/x-mermaid">
-graph LR
-    subgraph dispatcher[dispatcher.py]
-        D[Dispatcher]
-    end
-    subgraph poller[poller.py]
-        P[Poller]
-    end
-    subgraph repository[repository.py]
-        R[JobRepository]
-    end
-    subgraph runners["runners/"]
-        OR[OpenRouterRunner]
-        CC[ClaudeCliRunner]
-    end
-    subgraph context[context.py]
-        CB[ContextBuilder]
-    end
-    subgraph notify[notifier.py]
-        N[Notifier]
-        PR[PdfRenderer]
-    end
-    subgraph tracker[tracker.py]
-        UT[UsageTracker]
-    end
-    subgraph diagram[diagram.py]
-        DG[ClassDiagram]
-    end
-    subgraph db["MariaDB wagodb"]
-        T1[claude_pro_batch]
-        T2[ki_localhost_cache]
-        T3[ki_infrastructure]
-    end
-
-    D --> P
-    P --> R
-    P --> CB
-    P --> OR
-    P --> CC
-    P --> N
-    P --> UT
-    R --> T1
-    R --> T2
-    R --> T3
-    CB --> R
-    N --> PR
-
-</script>
-
-<script id="src-flow" type="text/x-mermaid">
-flowchart TD
-    Start([Cron trigger]) --> Spawn[Spawn Dispatcher]
-    Spawn --> Zombies[cleanup_zombies]
-    Zombies --> CalcSlots[Calculate free slots]
-    CalcSlots -->|no slots| Wait([Wait next cron])
-    CalcSlots -->|slots free| Poller[Spawn Poller process]
-
-    Poller --> Claim[claim_next
-SELECT FOR UPDATE]
-    Claim -->|no job| Wait
-    Claim -->|job found| Context[build_prompt]
-    Context --> LoadCtx[get_context_blocks]
-    LoadCtx --> Cache{resume_session?}
-    Cache -->|yes| SessionCache[Load session cache]
-    Cache -->|no| BuildPrompt
-    SessionCache --> BuildPrompt[Assemble prompt]
-    BuildPrompt --> SelectRunner{model type}
-
-    SelectRunner -->|openrouter model| ORRunner[OpenRouterRunner.run]
-    SelectRunner -->|sonnet/opus| CLIRunner[ClaudeCliRunner.run]
-
-    ORRunner --> APICall[_call_api_with_retry]
-    APICall --> ToolCall{tool_call?}
-    ToolCall -->|yes| ExecTool[_exec_tool bash]
-    ExecTool --> TruncCheck{output > MAX?}
-    TruncCheck -->|yes| Truncate[UTF-8 safe truncate]
-    TruncCheck -->|no| ReturnTool
-    Truncate --> ReturnTool[Return tool result]
-    ReturnTool --> APICall
-    ToolCall -->|no finish| CheckEsc[Check escalation]
-
-    CLIRunner --> Subprocess[subprocess claud]
-    Subprocess --> CheckEsc
-
-    CheckEsc -->|needs escalation| Escalate[escalate_to_sonnet]
-    CheckEsc -->|ok| CompleteJob
-    Escalate --> CompleteJob
-
-    CompleteJob[complete_job] --> DBCheck{DB status?}
-    DBCheck -->|done + result| KeepResult[Keep agent result
-Update tokens only]
-    DBCheck -->|running| NormalWrite[write_result
-Status + Result + Tokens]
-    KeepResult --> FallbackCheck
-    NormalWrite --> FallbackCheck{result empty?}
-    FallbackCheck -->|yes| FallbackText[Write fallback text]
-    FallbackCheck -->|no| RecordUsage
-    FallbackText --> RecordUsage
-
-    RecordUsage[UsageTracker.record] --> FetchBalance[Fetch OpenRouter balance]
-    FetchBalance --> NotifyCheck{final_status == done
-AND not killed?}
-    NotifyCheck -->|yes| Notify[Notifier.notify]
-    NotifyCheck -->|no| UpdateCache
-    Notify --> SendMail[_mail → PDF render]
-    SendMail --> SendMQTT[_mqtt → Mosquitto]
-    SendMQTT --> UpdateCache
-
-    UpdateCache[Update session cache] --> Done([Job complete])
-
-</script>
-
 <script>
+const diagrams = {
+  class: `classDiagram
+    %% ── Abstrakte Basen ──
+    class ModelRunner {
+        <<abstract>>
+        +run(prompt, system_prompt, job_id, on_kill_check, max_iter, tools) RunResult
+    }
+
+    class JobPhase {
+        <<abstract>>
+        +name: str
+        +max_iter(ctx) int
+        +system_prompt(ctx) str
+        +user_prompt(ctx) str
+        +tools() list|None
+        +on_complete(ctx, run) void
+    }
+
+    %% ── Pipeline-Phasen ──
+    class PlannerPhase {
+        +name = 'planner'
+        +max_iter() 6
+        +tools() []
+    }
+
+    class ExecutorPhase {
+        +name = 'executor'
+        +max_iter() step_count*3 + 2
+    }
+
+    class ReporterPhase {
+        +name = 'reporter'
+        +max_iter() 3
+        +tools() []
+    }
+
+    JobPhase <|-- PlannerPhase
+    JobPhase <|-- ExecutorPhase
+    JobPhase <|-- ReporterPhase
+
+    %% ── PhaseContext ──
+    class PhaseContext {
+        +job: JobRecord
+        +plan_path: str
+        +infra: str
+        +plan: str
+        +step_count: int
+        +total_in: int
+        +total_out: int
+        +total_cache: int
+        +total_cost: float
+        +iters: int
+    }
+
+    %% ── Pipeline ──
+    class JobPipeline {
+        -_runner: ModelRunner
+        -_infra: str
+        -_repo: JobRepository
+        -_phases: list[JobPhase]
+        +run(job, on_kill_check) RunResult
+        -_set_progress(job_id, bit) void
+    }
+
+    JobPipeline *-- PhaseContext
+    JobPipeline *-- "3" JobPhase
+    JobPipeline ..> ModelRunner
+
+    %% ── Runner ──
+    class OpenRouterRunner {
+        +model_id: str
+        +run(prompt, system_prompt, job_id, on_kill_check, max_iter, tools) RunResult
+    }
+
+    ModelRunner <|-- OpenRouterRunner
+    OpenRouterRunner ..> OpenRouterHttpClient
+
+    %% ── HTTP Client ──
+    class OpenRouterHttpClient {
+        +chat(model_id, messages, system_prompt, tools) dict
+        +get_credits() dict
+    }
+
+    %% ── Repositories ──
+    class JobRepository {
+        -VALID_TRANSITIONS: dict
+        +claim_next() JobRecord
+        +transition_status(job_id, new_status, error_msg) bool
+        +complete_job(job_id, run) RunResult
+        +write_result(job_id, run) void
+    }
+
+    class ContextRepository {
+        +get_context_blocks() tuple[str,str]
+        +get_session_cache() str|None
+    }
+
+    %% ── Processor ──
+    class JobProcessor {
+        -_repo: JobRepository
+        -_runners: dict
+        -_context: ContextBuilder
+        -_notifier: Notifier
+        -_tracker: UsageTracker
+        +process(job) void
+        -_execute(job) RunResult
+        -_enforce_quality(job, run) RunResult
+        -_maybe_escalate(job, run) RunResult
+    }
+
+    JobProcessor ..> JobPipeline : _execute()
+    JobProcessor ..> JobRepository
+    JobProcessor ..> ContextBuilder
+
+    %% ── Context ──
+    class ContextBuilder {
+        -_repo: ContextRepository
+        +build_prompt(job) str
+        +build_infra_context() str
+        +system_prompt() str
+    }
+
+    ContextBuilder ..> ContextRepository
+
+    %% ── Models ──
+    class JobRecord {
+        +id: int
+        +model: str
+        +prompt: str
+        +targetdate: date
+        +resume_session: bool
+    }
+
+    class RunResult {
+        +result: str
+        +status: str
+        +error: str
+        +in_tok: int
+        +out_tok: int
+        +cache_tok: int
+        +cost: float
+        +iters: int
+    }
+
+    JobPipeline ..> JobRecord
+    JobPipeline ..> RunResult
+    JobPhase ..> PhaseContext
+    JobPhase ..> RunResult`,
+
+  seq: `sequenceDiagram
+    participant P as Poller<br>(batch-poller.py)
+    participant JP as JobProcessor
+    participant JR as JobRepository
+    participant JB as JobPipeline
+    participant PL as PlannerPhase
+    participant EX as ExecutorPhase
+    participant RP as ReporterPhase
+    participant R as ModelRunner
+
+    P->>JR: claim_next()
+    JR-->>P: JobRecord
+
+    P->>JP: process(job)
+
+    JP->>JP: _execute(job)
+
+    rect rgb(30,40,60)
+        Note over JB,R: Pipeline.run() — drei Phasen
+
+        JP->>JB: pipeline.run(job, on_kill)
+        JB->>JB: _set_progress(job, bit=1)
+
+        JB->>R: run(max_iter=6, tools=[])
+        R-->>JB: RunResult (Plan-Datei)
+        JB->>PL: on_complete(ctx, run)
+        Note right of PL: Plan-Datei lesen,<br>step_count setzen
+
+        rect rgb(40,50,30)
+            JB->>JB: _set_progress(job, bit=4)
+            JB->>R: run(max_iter=step*3+2, tools=[exec,delegate])
+            R-->>JB: RunResult (Plan-Schritte abgearbeitet)
+            JB->>EX: on_complete(ctx, run)
+        end
+
+        rect rgb(50,30,40)
+            JB->>JB: _set_progress(job, bit=32)
+            JB->>R: run(max_iter=3, tools=[])
+            R-->>JB: RunResult (Bericht-Text)
+            JB->>RP: on_complete(ctx, run)
+            Note right of RP: Schreibt Bericht<br>direkt in DB
+        end
+
+        JB->>JB: _set_progress(job, bit=192)
+        JB-->>JP: RunResult(status=done)
+    end
+
+    JP->>JP: _enforce_quality(job, run)
+    JP->>JR: complete_job(job_id, run)
+    JR-->>JP: RunResult (merged)
+    JP-->>P: done/failed`,
+
+  module: `graph TB
+    subgraph batch["📦 /home/gh/batch/"]
+        poller["batch-poller.py<br/><i>polling loop</i>"]
+        processor["processor.py<br/><i>JobProcessor</i>"]
+        pipeline["pipeline.py<br/><i>JobPipeline + Phasen</i><br/>JobPhase · PlannerPhase<br/>ExecutorPhase · ReporterPhase"]
+        repository["repository.py<br/><i>JobRepository</i><br/>VALID_TRANSITIONS<br/>transition_status()"]
+        context["context.py<br/><i>ContextBuilder</i><br/>build_infra_context()"]
+        context_repo["context_repo.py<br/><i>ContextRepository</i><br/>get_context_blocks()<br/>get_session_cache()"]
+        models["models.py<br/><i>JobRecord · RunResult</i>"]
+        config["config.py<br/><i>ENV + DB Pool</i>"]
+
+        subgraph runners["🏃 runners/"]
+            base["base.py<br/><i>ModelRunner</i>"]
+            openrouter["openrouter.py<br/><i>OpenRouterRunner</i>"]
+            openrouter_http["openrouter_http.py<br/><i>OpenRouterHttpClient</i><br/>chat() · get_credits()"]
+        end
+    end
+
+    poller --> processor
+    processor --> pipeline
+    processor --> repository
+    processor --> context
+    context --> context_repo
+    processor --> openrouter
+    openrouter --> base
+    openrouter --> openrouter_http
+    processor --> models
+    pipeline --> models
+    pipeline --> base
+    repository --> config
+    context_repo --> config
+    openrunner_http --> config
+
+    classDef mod fill:#1c2128,stroke:#58a6ff,color:#c9d1d9
+    classDef sub fill:#0d1117,stroke:#30363d,color:#8b949e
+    class poller,processor,pipeline,repository,context,context_repo,models,config,base,openrouter,openrouter_http mod`,
+
+  flow: `flowchart TD
+    A["🔄 Poller<br>batch-poller.py"] --> B{"Job in Queue?"}
+    B -- "Nein" --> A
+    B -- "Ja" --> C["claim_next()<br>SELECT FOR UPDATE"]
+
+    C --> D["JobProcessor.process(job)"]
+    D --> E["Pipeline.run()"]
+
+    E --> F["📊 Planner Phase<br>max_iter=6, tools=[]"]
+    F --> G["Runner.run() → Agent"]
+    G --> H["Schreibt job-{id}.plan"]
+    H --> I["on_complete: Plan lesen,<br>step_count setzen"]
+
+    I --> J["⚡ Executor Phase<br>max_iter=step*3+2"]
+    J --> K["Runner.run() → Agent<br>tools=[exec, delegate]"]
+    K --> L{"Nächster offener<br>Schritt?"}
+    L -- "Ja" --> M["Schritt ausführen"]
+    M --> N["Plan aktualisieren<br>sed -i ..."]
+    N --> K
+    L -- "Alle [x]" --> O["on_complete"]
+
+    O --> P["📝 Reporter Phase<br>max_iter=3, tools=[]"]
+    P --> Q["Runner.run() → Agent<br>nur Text-Ausgabe"]
+    Q --> R["Bericht in DB schreiben"]
+
+    R --> S{"Quality Gate<br>≥400 Zeichen<br>≥2 ##-Abschnitte"}
+    S -- "Bestanden" --> T["complete_job()<br>status=done"]
+    S -- "Zu kurz" --> U["Requeue mit Feedback<br>→ neuer Job"]
+
+    T --> V["tracker.record()"]
+    V --> W["notifier.notify()"]
+    W --> X["_update_session_cache()"]
+    X --> A
+
+    style F fill:#1a3a1a,stroke:#3fb950
+    style J fill:#3a3a1a,stroke:#d4a017
+    style P fill:#3a1a2a,stroke:#ff6b6b
+    style S fill:#2a1a3a,stroke:#a06bd6
+    style T fill:#1a3a3a,stroke:#58a6ff
+    style U fill:#3a1a1a,stroke:#ff4444`
+};
+
+// Mermaid init
 mermaid.initialize({
   startOnLoad: false,
   theme: 'dark',
   themeVariables: {
-    darkMode: true,
-    background: '#0d1117',
-    primaryColor: '#1f6feb',
+    primaryColor: '#1c2128',
+    primaryBorderColor: '#58a6ff',
     primaryTextColor: '#c9d1d9',
-    primaryBorderColor: '#30363d',
     lineColor: '#58a6ff',
     secondaryColor: '#161b22',
-    tertiaryColor: '#21262d',
-    fontSize: '13px'
+    tertiaryColor: '#0d1117',
+    background: '#0d1117',
+    mainBkg: '#1c2128',
+    nodeBorder: '#58a6ff',
+    clusterBkg: '#161b22',
+    titleColor: '#c9d1d9',
+    edgeLabelBackground: '#0d1117',
   },
+  fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+  fontSize: 12,
+  sequence: { useMaxWidth: true, actorFontSize: 11, messageFontSize: 11 },
   class: { useMaxWidth: true },
-  sequence: { useMaxWidth: true, actorMargin: 50 },
-  flowchart: { useMaxWidth: true, curve: 'basis' }
+  flowchart: { useMaxWidth: true, htmlLabels: true },
 });
 
-const diagrams = [
-  { id: 'class', src: 'src-class', wrap: 'wrap-class', card: 'card-class' },
-  { id: 'seq', src: 'src-seq', wrap: 'wrap-seq', card: 'card-seq' },
-  { id: 'modules', src: 'src-modules', wrap: 'wrap-modules', card: null },
-  { id: 'flow', src: 'src-flow', wrap: 'wrap-flow', card: null }
-];
-
 async function renderAll() {
-  for (const d of diagrams) {
-    const srcEl = document.getElementById(d.src);
-    const wrapEl = document.getElementById(d.wrap);
-    const code = srcEl.textContent.trim();
+  for (const [key, code] of Object.entries(diagrams)) {
+    const wrap = document.getElementById(`wrap-${key}`);
     try {
-      const { svg } = await mermaid.render('svg-' + d.id, code);
-      wrapEl.innerHTML = svg;
-      wrapEl.classList.remove('loading');
-      const btn = wrapEl.parentElement.querySelector('.fs-btn');
+      const { svg } = await mermaid.render(`svg-${key}`, code.trim());
+      wrap.innerHTML = svg;
+      wrap.classList.remove('loading');
+      const btn = document.querySelector(`[data-target="${key}"]`);
       if (btn) btn.disabled = false;
     } catch (e) {
-      wrapEl.innerHTML = '<pre style="color:#f85149;font-size:.75rem">' +
-        d.id + ': ' + e.message + '</pre>';
-      wrapEl.classList.remove('loading');
+      wrap.innerHTML = `<pre style="color:#ff6b6b;font-size:.75rem">${e.message}</pre>`;
+      wrap.classList.remove('loading');
     }
   }
 }
-renderAll();
 
-// Fullscreen logic
+// Fullscreen
 const overlay = document.getElementById('fs-overlay');
+const viewport = document.getElementById('fs-viewport');
 const inner = document.getElementById('fs-inner');
 const label = document.getElementById('fs-label');
-let scale = 1, panX = 0, panY = 0;
+let scale = 1, tx = 0, ty = 0, dragging = false, dx0, dy0;
 
 document.querySelectorAll('.fs-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    const target = btn.dataset.target;
-    const wrap = document.getElementById('wrap-' + target);
-    const svg = wrap.querySelector('svg');
-    if (!svg) return;
-    inner.innerHTML = '';
-    inner.appendChild(svg.cloneNode(true));
-    label.textContent = target;
-    scale = 1; panX = 0; panY = 0;
+    const key = btn.dataset.target;
+    const src = document.getElementById(`wrap-${key}`);
+    inner.innerHTML = src.innerHTML;
+    label.textContent = btn.closest('.card').querySelector('.card-title').textContent;
+    scale = 1; tx = ty = 0;
     updateTransform();
     overlay.classList.add('open');
   });
 });
 
-document.getElementById('btn-close').onclick = () => overlay.classList.remove('open');
-document.getElementById('btn-zoomin').onclick = () => { scale *= 1.3; updateTransform(); };
-document.getElementById('btn-zoomout').onclick = () => { scale /= 1.3; updateTransform(); };
-document.getElementById('btn-reset').onclick = () => { scale=1; panX=0; panY=0; updateTransform(); };
+document.getElementById('fs-close').onclick = () => overlay.classList.remove('open');
 document.addEventListener('keydown', e => { if (e.key === 'Escape') overlay.classList.remove('open'); });
 
-const viewport = document.getElementById('fs-viewport');
+document.getElementById('zoom-in').onclick = () => { scale = Math.min(scale * 1.2, 5); updateTransform(); };
+document.getElementById('zoom-out').onclick = () => { scale = Math.max(scale / 1.2, 0.1); updateTransform(); };
+document.getElementById('zoom-reset').onclick = () => { scale = 1; tx = ty = 0; updateTransform(); };
+
 viewport.addEventListener('wheel', e => {
   e.preventDefault();
   scale *= e.deltaY < 0 ? 1.1 : 0.9;
+  scale = Math.max(0.1, Math.min(5, scale));
   updateTransform();
 }, { passive: false });
 
-let dragging = false, dragStartX, dragStartY;
-viewport.addEventListener('mousedown', e => {
-  dragging = true;
-  dragStartX = e.clientX - panX;
-  dragStartY = e.clientY - panY;
-  viewport.classList.add('grabbing');
-});
-document.addEventListener('mousemove', e => {
-  if (!dragging) return;
-  panX = e.clientX - dragStartX;
-  panY = e.clientY - dragStartY;
-  updateTransform();
-});
-document.addEventListener('mouseup', () => {
-  dragging = false;
-  viewport.classList.remove('grabbing');
-});
+viewport.addEventListener('mousedown', e => { dragging = true; dx0 = e.clientX - tx; dy0 = e.clientY - ty; viewport.classList.add('grabbing'); });
+window.addEventListener('mousemove', e => { if (!dragging) return; tx = e.clientX - dx0; ty = e.clientY - dy0; updateTransform(); });
+window.addEventListener('mouseup', () => { dragging = false; viewport.classList.remove('grabbing'); });
 
 function updateTransform() {
-  inner.style.transform = `translate(${panX}px,${panY}px) scale(${scale})`;
+  inner.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
 }
-</script>
 
+renderAll();
+</script>
 </body>
 </html>
