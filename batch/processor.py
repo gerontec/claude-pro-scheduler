@@ -10,6 +10,7 @@ from .runners.openrouter_http import OpenRouterHttpClient
 from .context import ContextBuilder
 from .models import JobRecord, RunResult
 from .notifier import Notifier
+from .pipeline import JobPipeline
 from .repository import JobRepository
 from .runners import ModelRunner
 from .tracker import UsageTracker
@@ -38,11 +39,10 @@ class JobProcessor:
             run = self._execute(job)
             run = self._maybe_escalate(job, run)
             run = self._enforce_quality(job, run)      # Quality-Gate vor Write
-            final_status = self._repo.complete_job(job.id, run)
+            run = self._repo.complete_job(job.id, run) # merged DB-result zurück
             self._tracker.record(run)
             self._fetch_openrouter_balance(job.id)
-            if 'Killed by user' not in (run.error or '') and final_status == 'done':
-                run.status = 'done'  # für notify()
+            if 'Killed by user' not in (run.error or '') and run.status == 'done':
                 self._notifier.notify(job, run)
             self._update_session_cache()
             print(
@@ -67,7 +67,7 @@ class JobProcessor:
     # ── intern ────────────────────────────────────────────────
 
     def _execute(self, job: JobRecord) -> RunResult:
-        """Wählt Runner, baut Prompt, führt aus."""
+        """Wählt Runner, führt Job durch dreiphasige Pipeline aus."""
         runner = self._runners.get(job.model)
         if runner is None:
             return RunResult(
@@ -76,13 +76,10 @@ class JobProcessor:
                 in_tok=0, out_tok=0, cache_tok=0, cost=0.0,
             )
 
-        prompt        = self._context.build_prompt(job)
-        system_prompt = self._context.system_prompt()
-
-        run = runner.run(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            job_id=job.id,
+        infra_context = self._context.build_infra_context()
+        pipeline      = JobPipeline(runner, infra_context=infra_context, repo=self._repo)
+        run           = pipeline.run(
+            job=job,
             on_kill_check=lambda: self._repo.is_killed(job.id),
         )
 
@@ -108,11 +105,16 @@ class JobProcessor:
         Nur 'done'-Jobs werden geprüft — failed/killed bleiben unverändert.
         Der Agent kann prompt-seitig angewiesen werden ausführlich zu schreiben,
         aber erst dieser Check erzwingt es strukturell.
+
+        Wenn run.result leer ist (Pipeline-Modus: Reporter schreibt direkt in DB),
+        wird das Ergebnis aus der DB gelesen.
         """
         if run.status != 'done':
             return run
 
         result = run.result or ''
+        if not result.strip():
+            result = self._repo.read_agent_result(job.id) or ''
         errors = []
 
         if len(result.strip()) < self._QUALITY_MIN_CHARS:

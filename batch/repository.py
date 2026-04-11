@@ -1,10 +1,8 @@
 """DB-Schicht — alle SQL-Operationen auf claude_pro_batch.
 
-Verbesserungen:
-- Connection-Pooling via config.get_connection/release_connection
-- claim_next() nutzt SELECT FOR UPDATE (Race-Condition-frei)
-- Kontext-Blocks gecacht (5 Min TTL) statt pro Job neu laden
-- write_result() prüft ob result leer blieb → Fallback-Text
+Status-Übergänge laufen ausschließlich über transition_status() (State Machine).
+Direkte Status-Writes sind verboten — nur claim_next() und transition_status()
+dürfen den Status ändern.
 """
 import os
 import sys
@@ -12,6 +10,15 @@ import time
 
 from .config import get_connection, release_connection, CONTEXT_CACHE_TTL
 from .models import JobRecord, RunResult
+
+# ── Job State Machine ────────────────────────────────────────────────────────
+# Erlaubte Übergänge. Terminale Zustände haben leeres Set.
+VALID_TRANSITIONS: dict[str, set[str]] = {
+    'queued':  {'running'},
+    'running': {'done', 'failed'},
+    'done':    set(),
+    'failed':  set(),
+}
 
 
 class JobRepository:
@@ -86,22 +93,85 @@ class JobRepository:
             conn.autocommit(True)
             release_connection(conn)
 
+    # ── State Machine ───────────────────────────────────────────
+
+    def transition_status(
+        self, job_id: int, new_status: str, error_msg: str = ''
+    ) -> bool:
+        """Atomarer, validierter Status-Übergang.
+
+        Verwendet SELECT FOR UPDATE um Race Conditions bei parallelen Jobs
+        auszuschließen. Gibt False zurück wenn der Übergang ungültig ist
+        (z.B. done→running) — kein Exception.
+        """
+        conn = get_connection()
+        try:
+            conn.autocommit(False)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT status FROM claude_pro_batch WHERE id=%s FOR UPDATE",
+                    (job_id,)
+                )
+                row = cur.fetchone()
+                if not row:
+                    conn.rollback()
+                    return False
+
+                old_status = row['status']
+                if new_status not in VALID_TRANSITIONS.get(old_status, set()):
+                    print(
+                        f"[SM] Ungültiger Übergang: {old_status}→{new_status} "
+                        f"für Job #{job_id} — ignoriert",
+                        file=sys.stderr,
+                    )
+                    conn.rollback()
+                    return False
+
+                extra_sql = ''
+                params: list = [new_status]
+                if new_status in ('done', 'failed'):
+                    extra_sql += ', finished_at=COALESCE(finished_at, NOW())'
+                if error_msg:
+                    extra_sql += ', error_msg=%s'
+                    params.append(error_msg)
+                params.extend([job_id, old_status])
+
+                cur.execute(
+                    f"UPDATE claude_pro_batch SET status=%s{extra_sql} "
+                    f"WHERE id=%s AND status=%s",
+                    params,
+                )
+            conn.commit()
+            return True
+        except Exception as exc:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            print(f"[SM] transition_status Fehler: {exc}", file=sys.stderr)
+            return False
+        finally:
+            conn.autocommit(True)
+            release_connection(conn)
+
     # ── Write ───────────────────────────────────────────────────
 
     def write_result(self, job_id: int, run: RunResult) -> None:
-        """Schreibt Ergebnis. Der Processor hat immer das letzte Wort auf den Status.
-        Agent-geschriebenes result (via pymysql im Loop) wird bevorzugt wenn länger."""
+        """Schreibt Ergebnis-Daten und überführt Status via State Machine.
+        Agent-geschriebenes result wird bevorzugt wenn länger."""
+        # Status-Übergang über SM — verhindert ungültige Writes
+        self.transition_status(job_id, run.status, run.error or '')
+
         db = get_connection()
         try:
             with db.cursor() as cur:
                 cur.execute(
-                    "UPDATE claude_pro_batch SET status=%s, "
+                    "UPDATE claude_pro_batch SET "
                     "result=COALESCE(NULLIF(result,''), %s), "
                     "input_tokens=%s, output_tokens=%s, cache_tokens=%s, "
-                    "cost_usd=%s, finished_at=COALESCE(finished_at,NOW()), "
-                    "error_msg=%s WHERE id=%s",
-                    (run.status, run.result, run.in_tok, run.out_tok,
-                     run.cache_tok, run.cost, run.error, job_id)
+                    "cost_usd=%s WHERE id=%s",
+                    (run.result, run.in_tok, run.out_tok,
+                     run.cache_tok, run.cost, job_id)
                 )
             db.commit()
 
@@ -129,13 +199,14 @@ class JobRepository:
         finally:
             release_connection(db)
 
-    def complete_job(self, job_id: int, run: RunResult) -> str:
+    def complete_job(self, job_id: int, run: RunResult) -> RunResult:
         """Processor-seitiger Abschluss.
 
         Liest das agent-geschriebene result (falls vorhanden und länger als runner-result),
         merged es in den RunResult, schreibt dann via write_result.
         Der Processor setzt immer den finalen Status — kein blindes Akzeptieren
         von agent-gesetztem status='done'.
+        Gibt den finalen RunResult zurück (mit gemergtem result für Notifier/Mail).
         """
         db = get_connection()
         try:
@@ -165,7 +236,7 @@ class JobRepository:
             )
 
         self.write_result(job_id, run)
-        return run.status
+        return run
 
     # ── Read ────────────────────────────────────────────────────
 

@@ -82,7 +82,7 @@ OPENROUTER_MODELS   = {
     'mimo-pro':  'xiaomi/mimo-v2-pro',
 }
 
-MAX_TOOL_ITERATIONS  = 3
+MAX_TOOL_ITERATIONS  = 8
 MAX_TOOL_OUTPUT      = 5000
 MAX_PARALLEL_AGENTS  = 9
 

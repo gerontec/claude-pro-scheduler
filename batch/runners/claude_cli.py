@@ -25,6 +25,8 @@ class ClaudeCliRunner(ModelRunner):
         system_prompt: str,
         job_id: int,
         on_kill_check: Callable[[], bool],
+        max_iter: int | None = None,
+        tools: list | None = None,   # ignoriert — Claude CLI verwaltet Tools selbst
     ) -> RunResult:
         with tempfile.NamedTemporaryFile(
             prefix=f'claude_pro_{job_id}_', suffix='.json', delete=False

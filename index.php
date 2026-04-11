@@ -52,6 +52,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header("Location: ?msg=rescheduled&job=$id");
         exit;
     }
+    if (isset($_POST['edit_job'])) {
+        $id     = (int)$_POST['edit_job'];
+        $model  = in_array($_POST['edit_model'], ['sonnet','opus','xiaomi','mimo-pro','qwen-free']) ? $_POST['edit_model'] : 'xiaomi';
+        $prompt = trim($_POST['edit_prompt']);
+        $date   = $_POST['edit_date'] ?? date('Y-m-d');
+        if ($prompt) {
+            $stmt = $pdo->prepare("UPDATE claude_pro_batch SET model=?, prompt=?, targetdate=?,
+                result=NULL, error_msg=NULL, input_tokens=NULL, output_tokens=NULL,
+                cache_tokens=NULL, cost_usd=NULL, started_at=NULL, finished_at=NULL,
+                progress=0, status='queued'
+                WHERE id=? AND status IN ('queued','done','failed')");
+            $stmt->execute([$model, $prompt, $date, $id]);
+        }
+        header("Location: ?msg=rescheduled&job=$id");
+        exit;
+    }
 }
 
 // Flash Message from GET Parameter
@@ -363,15 +379,11 @@ body { background:#0d1117; }
                         'done'    => 'bit-on-done',
                         default   => 'bit-on-fail',
                     };
-                    // Bits immer zeigen wenn progress > 0 oder job aktiv/fertig
+                    // Progess-Wert zeigen wenn > 0 oder job aktiv/fertig
                     if ($prog > 0 || in_array($st, ['running','done','failed'])):
+                    $progColor = match($st) { 'done' => '#198754', 'running' => '#0dcaf0', default => '#6c757d' };
                     ?>
-                    <div class="progress-bits" title="Progress: <?= $prog ?>/255 (<?= decbin($prog) ?>)">
-                    <?php for ($b = 0; $b < 8; $b++): $active = (bool)($prog & (1 << $b)); ?>
-                        <div class="bit-dot <?= $active ? $bitOn : 'bit-off' ?>"
-                             title="Bit <?= $b+1 ?>: <?= $labels[$b] ?><?= $active ? ' ✓' : '' ?>"></div>
-                    <?php endfor; ?>
-                    </div>
+                    <div title="Progress: <?= $prog ?>/255 (<?= decbin($prog) ?>)" style="font-size:.75rem;color:<?= $progColor ?>;margin-top:2px;font-family:monospace"><?= $prog ?>/255</div>
                     <?php endif; ?>
                 </td>
                 <td>
@@ -421,6 +433,12 @@ body { background:#0d1117; }
                             <i class="bi bi-arrow-clockwise"></i>
                         </button>
                     </form>
+                    <?php endif; ?>
+                    <?php if (in_array($j['status'], ['queued','done','failed'])): ?>
+                    <button class="btn btn-sm btn-outline-info py-0 ms-1"
+                            onclick="openEdit(<?= $j['id'] ?>,<?= htmlspecialchars(json_encode($j['model'])) ?>,<?= htmlspecialchars(json_encode($j['targetdate'])) ?>,<?= htmlspecialchars(json_encode($j['prompt_full'])) ?>)">
+                        <i class="bi bi-pencil"></i>
+                    </button>
                     <?php endif; ?>
                     <?php if ($j['status'] !== 'running'): ?>
                     <form method="POST" class="d-inline"
@@ -783,6 +801,61 @@ function copyCache() {
             b.classList.replace('btn-success', 'btn-outline-primary');
         }, 2000);
     });
+}
+</script>
+
+<!-- Edit Modal -->
+<div class="modal fade" id="editModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content bg-dark text-light border-secondary">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title"><i class="bi bi-pencil me-2"></i>Job bearbeiten &amp; neu einreihen</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="POST">
+        <div class="modal-body">
+          <input type="hidden" name="edit_job" id="edit_job_id">
+          <div class="row g-2 mb-3">
+            <div class="col-sm-6">
+              <label class="form-label small text-muted text-uppercase">Model</label>
+              <select class="form-select bg-dark text-light border-secondary" name="edit_model" id="edit_model">
+                <option value="xiaomi">xiaomi (mimo-v2-flash)</option>
+                <option value="mimo-pro">mimo-pro (mimo-v2-pro)</option>
+                <option value="qwen-free">qwen-free</option>
+                <option value="sonnet">sonnet</option>
+                <option value="opus">opus</option>
+              </select>
+            </div>
+            <div class="col-sm-6">
+              <label class="form-label small text-muted text-uppercase">Target Date</label>
+              <input type="date" class="form-control bg-dark text-light border-secondary"
+                     name="edit_date" id="edit_date">
+            </div>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small text-muted text-uppercase">Prompt</label>
+            <textarea class="form-control bg-dark text-light border-secondary font-monospace"
+                      name="edit_prompt" id="edit_prompt" rows="10"
+                      style="font-size:.8rem"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer border-secondary">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
+          <button type="submit" class="btn btn-warning">
+            <i class="bi bi-arrow-clockwise me-1"></i>Speichern &amp; Reschedule
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+<script>
+function openEdit(id, model, date, prompt) {
+    document.getElementById('edit_job_id').value = id;
+    document.getElementById('edit_model').value  = model;
+    document.getElementById('edit_date').value   = date;
+    document.getElementById('edit_prompt').value = prompt;
+    new bootstrap.Modal(document.getElementById('editModal')).show();
 }
 </script>
 </body>

@@ -60,6 +60,11 @@ class ContextBuilder:
         separator = '\n\n---\n'
         return separator.join(parts)
 
+    def build_infra_context(self) -> str:
+        """Gibt kombinierten Infrastruktur-Kontext für die Pipeline zurück."""
+        localhost_text, infra_text = self._repo.get_context_blocks()
+        return '\n\n'.join(filter(None, [localhost_text, infra_text]))
+
     @staticmethod
     def system_prompt() -> str:
         return SYSTEM_PROMPT

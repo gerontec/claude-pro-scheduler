@@ -99,17 +99,18 @@ class OpenRouterRunner(ModelRunner):
         system_prompt: str,
         job_id: int,
         on_kill_check: Callable[[], bool],
+        max_iter: int | None = None,
+        tools: list | None = None,   # None = TOOLS-Default, [] = keine Tools
     ) -> RunResult:
+        effective_max_iter = max_iter if max_iter is not None else MAX_TOOL_ITERATIONS
+        effective_tools    = tools if tools is not None else TOOLS
         messages   = [{'role': 'user', 'content': prompt}]
         total_in   = total_out = total_cache = 0
         total_cost = 0.0
-        # Loop-Erkennung: (befehl, output_hash) → wie oft identisch gesehen
-        # Gleicher Befehl mit gleichem Output = kein Fortschritt = Loop.
-        # Gleicher Befehl mit anderem Output (z.B. nach Dateiänderung) = OK.
         stall_counts: dict[tuple, int] = {}
-        cmd_counts: dict[str, int] = {}  # für Debug-Report
+        cmd_counts: dict[str, int] = {}
 
-        for iteration in range(1, MAX_TOOL_ITERATIONS + 1):
+        for iteration in range(1, effective_max_iter + 1):
             if on_kill_check():
                 return RunResult(
                     result='', status='failed', error='Killed by user',
@@ -117,7 +118,7 @@ class OpenRouterRunner(ModelRunner):
                     cache_tok=total_cache, cost=total_cost, iters=iteration,
                 )
 
-            body = self._http.chat(self.model_id, messages, system_prompt, TOOLS)
+            body = self._http.chat(self.model_id, messages, system_prompt, effective_tools)
 
             if 'error' in body:
                 raise ValueError(f"OpenRouter API Error: {body['error']}")
@@ -203,12 +204,12 @@ class OpenRouterRunner(ModelRunner):
                 cache_tok=total_cache, cost=total_cost, iters=iteration,
             )
 
-        debug = self._build_max_iter_debug(messages, cmd_counts, MAX_TOOL_ITERATIONS)
+        debug = self._build_max_iter_debug(messages, cmd_counts, effective_max_iter)
         return RunResult(
             result=debug,
-            status='failed', error=f'Max iterations ({MAX_TOOL_ITERATIONS}) erreicht',
+            status='failed', error=f'Max iterations ({effective_max_iter}) erreicht',
             in_tok=total_in, out_tok=total_out,
-            cache_tok=total_cache, cost=total_cost, iters=MAX_TOOL_ITERATIONS,
+            cache_tok=total_cache, cost=total_cost, iters=effective_max_iter,
         )
 
     @staticmethod

@@ -13,6 +13,8 @@ class ModelRunner(ABC):
         system_prompt: str,
         job_id: int,
         on_kill_check: Callable[[], bool],
+        max_iter: int | None = None,
+        tools: list | None = None,   # None = Runner-Default, [] = keine Tools
     ) -> RunResult:
         """
         Führt den Job aus und gibt RunResult zurück.
