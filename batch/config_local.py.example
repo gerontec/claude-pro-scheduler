@@ -1,0 +1,25 @@
+# Lokale Konfiguration — diese Datei NICHT ins Repo einchecken!
+# Kopiere sie nach config_local.py und trage deine Werte ein.
+# Alle hier gesetzten Werte überschreiben die ENV-Variablen in config.py.
+
+import os
+
+# Datenbank
+os.environ.setdefault('WAGODB_HOST',     'localhost')
+os.environ.setdefault('WAGODB_USER',     'myuser')
+os.environ.setdefault('WAGODB_PASSWORD', 'CHANGE_ME')
+os.environ.setdefault('WAGODB_NAME',     'wagodb')
+
+# E-Mail
+os.environ.setdefault('MAIL_TO',   'admin@example.com')
+os.environ.setdefault('MAIL_FROM', 'agent@example.com')
+os.environ.setdefault('SMTP_HOST', 'localhost')
+
+# MQTT (optional)
+os.environ.setdefault('MQTT_HOST', '127.0.0.1')
+
+# Batch-Server IP (für System-Prompt)
+os.environ.setdefault('BATCH_SERVER_IP', '192.168.1.1')
+
+# Pfad zur Claude-CLI
+os.environ.setdefault('CLAUDE_BIN', '/usr/local/bin/claude')

@@ -7,3 +7,5 @@ openrouter.key
 .claude_weekly_usage.json
 __pycache__/
 *.pyc
+*.bak
+batch/config_local.py
