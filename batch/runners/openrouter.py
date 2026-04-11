@@ -46,11 +46,10 @@ TOOLS = [
         'function': {
             'name': 'delegate',
             'description': (
-                'Beauftrage bis zu 9 günstige Sub-Agenten PARALLEL mit unabhängigen Teilaufgaben. '
-                'Jeder Sub-Agent hat Shell-Zugriff (exec) und kann DB/Netzwerk abfragen. '
-                'Nutze dies wenn die Hauptaufgabe in parallele Teilprobleme zerfällt '
-                '(z.B. mehrere Hosts prüfen, mehrere Tabellen analysieren, mehrere Dateien auswerten). '
-                'Alle Sub-Agenten laufen gleichzeitig — Ergebnisse werden gesammelt zurückgegeben. '
+                'Beauftrage genau 1 Sub-Agenten mit einer klar abgegrenzten Teilaufgabe. '
+                'Der Sub-Agent hat Shell-Zugriff (exec) und kann DB/Netzwerk abfragen. '
+                'Nutze dies NUR wenn die Teilaufgabe völlig unabhängig ist und separat laufen kann. '
+                'NICHT nutzen für einfache Shell-Befehle — die direkt mit exec ausführen. '
                 'Standard-Modell: xiaomi (günstig). Für komplexe Analyse: mimo-pro.'
             ),
             'parameters': {
@@ -60,7 +59,7 @@ TOOLS = [
                         'type': 'array',
                         'description': 'Liste von Aufgaben-Prompts für Sub-Agenten (max 9)',
                         'items': {'type': 'string'},
-                        'maxItems': 9,
+                        'maxItems': 1,
                     },
                     'model': {
                         'type': 'string',

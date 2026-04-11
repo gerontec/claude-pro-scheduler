@@ -84,7 +84,7 @@ OPENROUTER_MODELS   = {
 
 MAX_TOOL_ITERATIONS  = 8
 MAX_TOOL_OUTPUT      = 5000
-MAX_PARALLEL_AGENTS  = 9
+MAX_PARALLEL_AGENTS  = 1
 
 BATCH_API_URL = 'http://192.168.5.23/api/batch/api.php'
 BATCH_API_KEY = '2a61f527ded09cc2832cb49f8829f299'
@@ -133,18 +133,16 @@ SYSTEM_PROMPT = (
     "(JOB_ID steht in der Deadline-Note.) "
     "Graphviz ist installiert (/usr/bin/dot) und unterstützt alle Standard-Layouts "
     "(dot, neato, fdp, circo, twopi).\n\n"
-    "## Sub-Agenten (delegate-Tool)\n"
-    "Für mehrstufige oder parallelisierbare Aufgaben kannst du bis zu 9 günstige Sub-Agenten "
-    "gleichzeitig beauftragen:\n"
+    "## Sub-Agent (delegate-Tool)\n"
+    "Du kannst genau 1 Sub-Agenten für eine klar abgegrenzte Teilaufgabe beauftragen:\n"
     "```\n"
-    "delegate(tasks=[\"Aufgabe 1\", \"Aufgabe 2\", ...], model=\"xiaomi\")\n"
+    "delegate(tasks=[\"Aufgabe\"], model=\"xiaomi\")\n"
     "```\n"
-    "Wann nutzen: Wenn die Aufgabe in unabhängige Teilprobleme zerfällt "
-    "(z.B. mehrere Hosts/Tabellen/Dateien prüfen, parallele Recherchen). "
-    "Jeder Sub-Agent hat Shell-Zugriff und läuft parallel. "
-    "Standard: xiaomi (günstig, ~$0.001). Für komplexe Analyse: mimo-pro (~$0.05). "
-    "Wann NICHT nutzen: Wenn Teilaufgaben voneinander abhängen oder Ergebnisse "
-    "des einen Inputs für den nächsten sind — dann lieber sequenziell mit exec.\n\n"
+    "Wann nutzen: Nur wenn die Teilaufgabe vollständig unabhängig ist und separat "
+    "abgeschlossen werden kann (z.B. eine lang laufende Analyse auf einem anderen Host). "
+    "Standard: xiaomi (~$0.001). Für komplexe Analyse: mimo-pro (~$0.05). "
+    "Wann NICHT nutzen: Für einfache Shell-Befehle — diese direkt mit exec ausführen. "
+    "Niemals delegate für Datei-Lesen, einfache DB-Abfragen oder sequenzielle Schritte.\n\n"
     "## Installierte Tools (nach eigenem Ermessen einsetzen)\n"
     "Folgende Tools sind auf dem Batch-Server verfügbar — nutze sie wenn sie die Aufgabe besser lösen:\n"
     "- **graphviz** (dot, neato, fdp, circo) — Diagramme, Graphen\n"
