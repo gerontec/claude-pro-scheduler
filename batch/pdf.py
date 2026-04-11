@@ -1,9 +1,9 @@
 """PdfRenderer — konvertiert Markdown-Ergebnis zu PDF (fpdf2, Unicode)."""
+import io
 import os
 import re
 import tempfile
 from fpdf import FPDF
-from PIL import Image
 from fpdf.enums import XPos, YPos
 
 FONT_REGULAR = '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
@@ -20,7 +20,7 @@ class PdfRenderer:
     MONO   = 'DejaVuMono'
 
     def render(self, job_id: int, model: str, status: str,
-               cost, result: str, png_bytes: bytes | None = None) -> bytes:
+               cost, result: str, diagram_pdf: bytes | None = None) -> bytes:
         pdf = FPDF()
         pdf.set_margins(self.MARGIN, self.MARGIN, self.MARGIN)
         pdf.add_font(self.FONT,        '', FONT_REGULAR)
@@ -46,35 +46,23 @@ class PdfRenderer:
         for line in (result or '').splitlines():
             self._render_line(pdf, line)
 
-        # ── Diagramm einbetten (optional) ─────────────────────
-        if png_bytes:
-            self._embed_diagram(pdf, png_bytes)
+        # ── Diagramm-Seiten anhängen (via pypdf-Merge) ────────
+        if diagram_pdf:
+            return self._merge_diagram(pdf.output(), diagram_pdf)
 
         return pdf.output()
 
-    def _embed_diagram(self, pdf, png_bytes):
-        tmp = tempfile.NamedTemporaryFile(suffix='.png', delete=False)
-        try:
-            tmp.write(png_bytes)
-            tmp.flush()
-            w_px, h_px = Image.open(tmp.name).size
-            if w_px > 2000 or h_px > 1400:
-                page_w, page_h = 420, 297
-            else:
-                page_w, page_h = 297, 210
-            pdf.add_page(orientation='L', format=(page_w, page_h))
-            pdf.set_font(self.FONT, 'B', 14)
-            pdf.cell(0, 8, 'Anhang: Klassendiagramm',
-                     new_x=XPos.LMARGIN, new_y=YPos.NEXT)
-            pdf.ln(4)
-            margin = 10
-            avail_w = page_w - 2 * margin
-            avail_h = page_h - pdf.get_y() - margin
-            pdf.image(tmp.name, x=margin, y=pdf.get_y(),
-                      w=avail_w, h=avail_h)
-        finally:
-            tmp.close()
-            os.unlink(tmp.name)
+    def _merge_diagram(self, text_pdf: bytes, diagram_pdf: bytes) -> bytes:
+        """Hängt alle Seiten des Diagramm-PDFs ans Text-PDF an (Vektorgrafik)."""
+        from pypdf import PdfWriter, PdfReader
+        writer = PdfWriter()
+        for page in PdfReader(io.BytesIO(text_pdf)).pages:
+            writer.add_page(page)
+        for page in PdfReader(io.BytesIO(diagram_pdf)).pages:
+            writer.add_page(page)
+        out = io.BytesIO()
+        writer.write(out)
+        return out.getvalue()
 
     def _render_line(self, pdf: FPDF, line: str) -> None:
         usable = self.WIDTH - 2 * self.MARGIN

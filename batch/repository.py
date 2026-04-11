@@ -7,6 +7,7 @@ Verbesserungen:
 - write_result() prüft ob result leer blieb → Fallback-Text
 """
 import os
+import sys
 import time
 
 from .config import get_connection, release_connection, CONTEXT_CACHE_TTL
@@ -55,7 +56,7 @@ class JobRepository:
 
                 cur.execute(
                     "UPDATE claude_pro_batch SET status='running', "
-                    "started_at=NOW(), pid=%s WHERE id=%s",
+                    "started_at=NOW(), pid=%s, progress=0 WHERE id=%s",
                     (os.getpid(), row['id'])
                 )
                 conn.commit()
@@ -93,6 +94,11 @@ class JobRepository:
                      run.cache_tok, run.cost, run.error, job_id)
                 )
                 if cur.rowcount == 0:
+                    print(
+                        f"[write_result] WARNUNG: Job #{job_id} — rowcount=0 (status bereits 'done'), "
+                        f"aktualisiere nur Tokens/Cost",
+                        file=sys.stderr,
+                    )
                     cur.execute(
                         "UPDATE claude_pro_batch SET input_tokens=%s, "
                         "output_tokens=%s, cache_tokens=%s, cost_usd=%s "
@@ -125,6 +131,47 @@ class JobRepository:
         finally:
             release_connection(db)
 
+
+    def complete_job(self, job_id: int, run: RunResult) -> str:
+        """Einheitliches Write-Interface — deckt BEIDE Schreibwege ab.
+        
+        Logik:
+        - DB-status='done' UND DB-result nicht leer: behalte result, update nur tokens/cost
+        - DB-status='running': normaler write_result-Flow
+        - Gibt immer den finalen DB-status zurück
+        """
+        db = get_connection()
+        try:
+            with db.cursor() as cur:
+                cur.execute("SELECT status, result FROM claude_pro_batch WHERE id=%s", (job_id,))
+                row = cur.fetchone()
+            
+            if not row:
+                return 'unknown'
+            
+            current_status = row['status']
+            current_result = row['result']
+            
+            if current_status == 'done' and current_result and current_result.strip():
+                # Agent hat bereits status='done' + result geschrieben — nur Tokens/Cost updaten
+                with db.cursor() as cur:
+                    cur.execute(
+                        "UPDATE claude_pro_batch SET input_tokens=%s, output_tokens=%s, "
+                        "cache_tokens=%s, cost_usd=%s WHERE id=%s "
+                        "AND (input_tokens IS NULL OR input_tokens=0)",
+                        (run.in_tok, run.out_tok, run.cache_tok, run.cost, job_id)
+                    )
+                db.commit()
+                print(f"[complete_job] Job #{job_id}: Agent-Result beibehalten (status war bereits 'done')",
+                      file=sys.stderr)
+                return 'done'
+            else:
+                # Normaler Processor-Write
+                self.write_result(job_id, run)
+                return run.status
+        finally:
+            release_connection(db)
+
     # ── Read ────────────────────────────────────────────────────
 
     def read_agent_result(self, job_id):
@@ -132,6 +179,13 @@ class JobRepository:
             cur.execute("SELECT result FROM claude_pro_batch WHERE id=%s", (job_id,))
             row = cur.fetchone()
         return row['result'] if row and row['result'] else None
+
+    def read_db_status(self, job_id) -> str | None:
+        """Liest den aktuellen Status direkt aus der DB (Agent kann ihn direkt gesetzt haben)."""
+        with self._db.cursor() as cur:
+            cur.execute("SELECT status FROM claude_pro_batch WHERE id=%s", (job_id,))
+            row = cur.fetchone()
+        return row['status'] if row else None
 
     def is_killed(self, job_id):
         with self._db.cursor() as cur:

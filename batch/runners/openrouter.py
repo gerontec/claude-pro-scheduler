@@ -19,9 +19,9 @@ TOOLS = [
         'function': {
             'name': 'exec',
             'description': (
-                'Führe einen Shell-Befehl auf dem Batch-Server aus. '
+                'Führe einen Shell-Befehl auf dem Batch-Server (<BATCH_SERVER_IP>) aus. '
                 'SSH zu allen bekannten Nodes ist passwordlos möglich. '
-                'IPs und Hostnamen stehen im ki_infrastructure-Kontext.'
+                'Beispiel: ssh pi@<RASPBERRY_PI_IP> "befehl"'
             ),
             'parameters': {
                 'type': 'object',

@@ -3,7 +3,7 @@ import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from .config import SYSTEM_PROMPT, DB_CFG
+from .config import SYSTEM_PROMPT
 from .models import JobRecord
 
 _TZ = ZoneInfo('Europe/Berlin')
@@ -83,18 +83,29 @@ class ContextBuilder:
         urgency = "gründlich und vollständig arbeiten — du bist ein Batch-Agent, Zeit spielt keine Rolle."
         return (
             f"**Deadline:** {job.targetdate} (noch ca. {int(hours_left)}h) – {urgency}\n\n"
+            f"**Fortschritt live melden** (Web-UI zeigt Bits in Echtzeit):\n"
+            f"```bash\n"
+            f"mysql -u gh -pa12345 wagodb -e "
+            f"\"UPDATE claude_pro_batch SET progress=progress|WERT WHERE id={job.id}\"\n"
+            f"```\n"
+            f"Werte: 1=Analyse, 2=Recherche, 4=Hauptarbeit, 8=Daten, 16=Auswertung, "
+            f"32=Bericht, 64=DB-Write, 128=Verifikation\n\n"
             f"**PFLICHT vor Abschluss:** Schreibe dein finales Ergebnis selbst in die Datenbank "
             f"(Job-ID: {job.id}):\n"
             f"```python\n"
             f"import pymysql\n"
-            f"_db = pymysql.connect(**DB_CFG, cursorclass=pymysql.cursors.DictCursor)\n"
+            f"_db = pymysql.connect(host='localhost', user='gh', password='a12345', database='wagodb')\n"
             f"_db.cursor().execute('UPDATE claude_pro_batch SET result=%s WHERE id=%s', "
             f"('DEIN ERGEBNIS', {job.id}))\n"
             f"_db.commit(); _db.close()\n"
             f"```\n"
-            f"Prüfe danach: mysql -u $WAGODB_USER -p$WAGODB_PASSWORD $WAGODB_NAME -e "
+            f"Prüfe danach: mysql -u gh -pa12345 wagodb -e "
             f"\"SELECT LEFT(result,200) FROM claude_pro_batch WHERE id={job.id}\"\n"
             f"Beende erst wenn das Ergebnis korrekt in der DB steht.\n\n"
+            f"**WICHTIG:** Schreibe NUR das `result`-Feld. Ändere NICHT den `status` — "
+            f"der Status wird vom Processor gesetzt. Direktes Ändern bricht den "
+            f"Notification-Flow. Die WHERE-Klausel `AND status != 'done'` schützt "
+            f"davor, aber sei dir dessen bewusst.\n\n"
             f"**Ergebnis-Qualität — PFLICHT:**\n"
             f"Das Ergebnis muss ein vollständiger, strukturierter Bericht sein. Nicht akzeptabel:\n"
             f"- Einzeilige Zusammenfassungen ('Aufgabe erledigt.')\n"
@@ -112,5 +123,17 @@ class ContextBuilder:
             f"3. Konkrete Daten/Werte/Befunde enthalten (keine Pauschalaussagen)?\n"
             f"4. Ergebnis in DB geschrieben (UPDATE claude_pro_batch SET result=...)?\n"
             f"5. DB-Eintrag verifiziert (SELECT LEFT(result,200) ...)?\n"
-            f"6. Erst nach Haken auf allen 5 Punkten: fertig melden."
+            f"6. Alle erzeugten Artefakte (Dateien, Skripte, Diagramme, Ausgaben) "
+            f"mit konkretem Befehl verifiziert (ls, cat, python3, curl, …) "
+            f"und Ergebnis im Bericht dokumentiert?\n"
+            f"7. Erst nach Haken auf allen Punkten: fertig melden.\n\n"
+            f"**PFLICHT: Füge am Ende deines Ergebnisses folgenden Abschnitt ein** "
+            f"(exakt so, mit den tatsächlichen Ergebnissen deiner Prüfungen):\n"
+            f"## ✓ Checkliste\n"
+            f"1. Aufgabe erledigt: [Ja/Nein — kurze Begründung]\n"
+            f"2. Struktur (≥3 Abschnitte): [Ja/Nein]\n"
+            f"3. Konkrete Befunde: [Ja/Nein — Beispiel nennen]\n"
+            f"4. DB-Write: [Ja — UPDATE ausgeführt / Nein — warum nicht]\n"
+            f"5. DB-Verify: [Ja — Ausgabe: '...' / Nein]\n"
+            f"6. Artefakte verifiziert: [Ja — ls/Ausgabe: '...' / Keine Artefakte]\n"
         )

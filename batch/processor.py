@@ -38,10 +38,11 @@ class JobProcessor:
         try:
             run = self._execute(job)
             run = self._maybe_escalate(job, run)
-            self._repo.write_result(job.id, run)
+            final_status = self._repo.complete_job(job.id, run)
             self._tracker.record(run)
             self._fetch_openrouter_balance(job.id)
-            if 'Killed by user' not in (run.error or ''):
+            if 'Killed by user' not in (run.error or '') and final_status == 'done':
+                run.status = 'done'  # für notify()
                 self._notifier.notify(job, run)
             self._update_session_cache()
             print(

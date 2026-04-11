@@ -8,7 +8,7 @@ from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-from .diagram import render_png
+from .diagram import render_png, DOT_SOURCE
 from .pdf import PdfRenderer
 
 from .config import SMTP_HOST, SMTP_PORT, MAIL_FROM, MAIL_TO
@@ -51,21 +51,46 @@ class Notifier:
             msg['Subject'] = f'[KI-Job #{job_id}] {status} — {model}'
             msg.attach(MIMEText(body, 'plain', 'utf-8'))
 
-            # PNG-Klassendiagramm rendern (falls relevant)
-            png_bytes = None
-            diagram_keywords = ('klassendiagramm', 'class diagram', 'objektmodell',
-                                 'oo-modell', 'klassenstruktur')
-            if any(k in (result or '').lower() for k in diagram_keywords):
-                try:
-                    png_bytes = render_png()
-                except Exception as png_err:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] PNG-Fehler Job #{job_id}: {png_err}",
-                          file=sys.stderr)
+            # Diagramm-PDF laden (dot -Tpdf, Vektorgrafik)
+            import os as _os, subprocess as _sp
+            diagram_pdf = None
+            job_dot = f'/tmp/ki-diagram-{job_id}.dot'
+            job_pdf = f'/tmp/ki-diagram-{job_id}.pdf'
+            try:
+                if _os.path.exists(job_dot):
+                    # Agent hat DOT-Quelltext hinterlegt → zu PDF rendern
+                    r = _sp.run(['dot', '-Tpdf', job_dot, '-o', job_pdf],
+                                capture_output=True, timeout=30)
+                    if r.returncode == 0 and _os.path.exists(job_pdf):
+                        with open(job_pdf, 'rb') as f:
+                            diagram_pdf = f.read()
+                    _os.unlink(job_dot)
+                    if _os.path.exists(job_pdf):
+                        _os.unlink(job_pdf)
+                elif _os.path.exists(job_pdf):
+                    # Agent hat fertig-gerendertes PDF hinterlegt
+                    with open(job_pdf, 'rb') as f:
+                        diagram_pdf = f.read()
+                    _os.unlink(job_pdf)
+                else:
+                    # Fallback: Keyword-Check → statisches Klassendiagramm
+                    diagram_keywords = ('klassendiagramm', 'class diagram', 'objektmodell',
+                                        'oo-modell', 'klassenstruktur', 'flowchart',
+                                        'flussdiagramm', 'architekturdiagramm', 'er-diagramm')
+                    if any(k in (result or '').lower() for k in diagram_keywords):
+                        r = _sp.run(['dot', '-Tpdf'],
+                                    input=DOT_SOURCE.encode(),
+                                    capture_output=True, timeout=30)
+                        if r.returncode == 0:
+                            diagram_pdf = r.stdout
+            except Exception as diag_err:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] Diagramm-Fehler Job #{job_id}: {diag_err}",
+                      file=sys.stderr)
 
-            # PDF-Anhang (inkl. eingebettetes Diagramm)
+            # PDF-Anhang
             try:
                 pdf_bytes = PdfRenderer().render(job_id, model, status, cost, result,
-                                                 png_bytes=png_bytes)
+                                                 diagram_pdf=diagram_pdf)
                 part = MIMEApplication(pdf_bytes, _subtype='pdf')
                 part.add_header('Content-Disposition', 'attachment',
                                 filename=f'ki-job-{job_id}.pdf')
@@ -73,17 +98,6 @@ class Notifier:
             except Exception as pdf_err:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}] PDF-Fehler Job #{job_id}: {pdf_err}",
                       file=sys.stderr)
-
-            # PNG-Klassendiagramm als separaten Anhang anfügen (unverändert)
-            if png_bytes:
-                try:
-                    img_part = MIMEApplication(png_bytes, _subtype='png')
-                    img_part.add_header('Content-Disposition', 'attachment',
-                                        filename=f'ki-job-{job_id}-diagram.png')
-                    msg.attach(img_part)
-                except Exception as png_err:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}] PNG-Anhang-Fehler Job #{job_id}: {png_err}",
-                          file=sys.stderr)
 
             smtp = smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10)
             smtp.sendmail(MAIL_FROM, [MAIL_TO], msg.as_string())
