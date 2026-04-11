@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<title>Batch Job System — Objektmodell v202604111703</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --border:   #30363d;
+    --text:     #c9d1d9;
+    --muted:    #8b949e;
+    --accent:   #58a6ff;
+    --accent2:  #3fb950;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: .85rem;
+    padding: 1.2rem 2rem 3rem;
+  }
+  h1 {
+    font-size: 1.05rem;
+    color: var(--accent);
+    border-bottom: 1px solid var(--border);
+    padding-bottom: .5rem;
+    margin-bottom: 1.2rem;
+    letter-spacing: .02em;
+  }
+  h2 {
+    font-size: .72rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    margin: 1.6rem 0 .5rem;
+  }
+  .version {
+    font-size: .7rem;
+    color: var(--muted);
+    margin-bottom: 1rem;
+  }
+  a { color: var(--accent); text-decoration: none; font-size: .8rem; }
+  a:hover { text-decoration: underline; }
+  .back { margin-bottom: 1rem; display: inline-block; }
+
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media(max-width:900px){ .grid { grid-template-columns: 1fr; } }
+
+  .card {
+    position: relative;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: .5rem .75rem;
+    border-bottom: 1px solid var(--border);
+    background: #1c2128;
+  }
+  .card-title {
+    font-size: .72rem;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+  }
+  .fs-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    border-radius: 4px;
+    width: 26px; height: 26px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: .8rem;
+    transition: color .15s, border-color .15s;
+  }
+  .fs-btn:hover { color: var(--accent); border-color: var(--accent); }
+  .fs-btn:disabled { opacity: .3; cursor: default; }
+
+  .diagram-wrap {
+    padding: 1rem;
+    overflow: auto;
+    min-height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .diagram-wrap svg { max-width: 100%; height: auto; }
+  .diagram-wrap.loading::after {
+    content: 'rendering…';
+    color: var(--muted);
+    font-size: .75rem;
+    animation: blink 1s infinite;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+  #fs-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    background: var(--bg);
+    flex-direction: column;
+  }
+  #fs-overlay.open { display: flex; }
+
+  #fs-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: .6rem 1rem;
+    border-bottom: 1px solid var(--border);
+    background: #1c2128;
+    flex-shrink: 0;
+  }
+  #fs-label { font-size: .8rem; color: var(--muted); }
+
+  .fs-controls { display: flex; gap: .4rem; align-items: center; }
+  .ctrl-btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 4px;
+    padding: .25rem .55rem;
+    cursor: pointer;
+    font-size: .8rem;
+    transition: border-color .15s, color .15s;
+  }
+  .ctrl-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  #fs-viewport {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    user-select: none;
+  }
+  #fs-viewport.grabbing { cursor: grabbing; }
+  #fs-inner {
+    width: 95vw;
+    height: 90vh;
+    transform-origin: center center;
+  }
+  #fs-inner svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+  }
+
+  #fs-hint {
+    font-size: .7rem;
+    color: var(--muted);
+    padding: .3rem 1rem;
+    border-top: 1px solid var(--border);
+    text-align: center;
+    flex-shrink: 0;
+  }
+</style>
+</head>
+<body>
+
+<a class="back" href="index.php">← zurück zur Batch-UI</a>
+<h1>🤖 Batch Job System — Objektmodell</h1>
+<div class="version">Version 202604111703 | Generiert: 2026-04-11 17:03:04 | Auto-Update via Crontab</div>
+
+<div class="grid">
+
+  <div>
+    <div class="card" id="card-class">
+      <div class="card-header">
+        <span class="card-title">Klassenstruktur</span>
+        <button class="fs-btn" title="Fullscreen" data-target="class" disabled>⛶</button>
+      </div>
+      <div class="diagram-wrap loading" id="wrap-class"></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card" id="card-seq">
+      <div class="card-header">
+        <span class="card-title">Job-Lifecycle (Sequenz)</span>
+        <button class="fs-btn" title="Fullscreen" data-target="seq" disabled>⛶</button>
+      </div>
+      <div class="diagram-wrap loading" id="wrap-seq"></div>
+    </div>
+  </div>
+
+</div>
+
+<h2>Modul-Übersicht</h2>
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Module</span>
+    <button class="fs-btn" title="Fullscreen" data-target="modules" disabled>⛶</button>
+  </div>
+  <div class="diagram-wrap loading" id="wrap-modules"></div>
+</div>
+
+<h2>Datenfluss</h2>
+<div class="card">
+  <div class="card-header">
+    <span class="card-title">Datenfluss</span>
+    <button class="fs-btn" title="Fullscreen" data-target="flow" disabled>⛶</button>
+  </div>
+  <div class="diagram-wrap loading" id="wrap-flow"></div>
+</div>
+
+<!-- Fullscreen overlay -->
+<div id="fs-overlay">
+  <div id="fs-topbar">
+    <span id="fs-label"></span>
+    <div class="fs-controls">
+      <button class="ctrl-btn" id="btn-zoomin">＋</button>
+      <button class="ctrl-btn" id="btn-zoomout">－</button>
+      <button class="ctrl-btn" id="btn-reset">⟳ Reset</button>
+      <button class="ctrl-btn" id="btn-close">✕ Schließen</button>
+    </div>
+  </div>
+  <div id="fs-viewport">
+    <div id="fs-inner"></div>
+  </div>
+  <div id="fs-hint">Scroll = Zoom | Drag = Pan | Esc = Schließen</div>
+</div>
+
+<!-- Mermaid source definitions (hidden) -->
+<script id="src-class" type="text/x-mermaid">
+classDiagram
+    %% Version: 202604111703 | Updated: 2026-04-11 17:03:04
+    class ki_localhost_cache {
+        +int id
+        +varchar category
+        +varchar label
+        +text value
+        +timestamp updated_at
+    }
+    class ki_infrastructure {
+        +int id
+        +varchar network_range
+        +varchar ip_address
+        +varchar hostname
+        +varchar open_ports
+        +varchar services
+        +varchar device_purpose
+        +varchar os_guess
+    }
+    class claude_pro_batch {
+        +bigint id
+        +date targetdate
+        +enum model
+        +bool resume_session
+        +text prompt
+        +enum status
+        +longtext result
+        +int input_tokens
+        +int output_tokens
+        +int cache_tokens
+        +decimal cost_usd
+        +tinyint progress
+        +datetime started_at
+        +datetime finished_at
+        +text error_msg
+        +int pid
+    }
+    class JobRecord {
+        +int id
+        +str model
+        +str prompt
+        +date targetdate
+        +bool resume_session
+    }
+    class RunResult {
+        +str result
+        +str status
+        +int in_tok
+        +int out_tok
+        +int cache_tok
+        +float cost
+        +str error
+        +int iters
+    }
+    class JobRepository {
+        -__init__()
+        +db()
+        -_query()
+        +claim_next()
+        +write_result()
+        +complete_job()
+        +read_agent_result()
+        +read_db_status()
+        +is_killed()
+        +requeue_with_quality_feedback()
+        +escalate_to_sonnet()
+        +get_session_cache()
+        +get_context_blocks()
+        +save_openrouter_balance()
+        +close()
+    }
+    class ModelRunner {
+        <<interface>>
+        +run(prompt, sys, job_id, cb) RunResult
+    }
+    class OpenRouterRunner {
+        -model_id str
+        -api_key str
+        -__init__()
+        +run()
+        -_build_max_iter_debug()
+        -_parse_args()
+        -_dispatch_tool()
+        -_dispatch_delegate()
+        -_exec_tool()
+    }
+    class ClaudeCliRunner {
+        -model str
+        -__init__()
+        +run()
+        -_run_process()
+    }
+    class ContextBuilder {
+        -__init__()
+        +build_prompt()
+        +system_prompt()
+        +needs_escalation()
+        -_deadline_note()
+    }
+    class Notifier {
+        +notify()
+        +send_mail_direct()
+        -_mail()
+        -_send_mail()
+        -_mqtt()
+        -_own_ipv4()
+        -_own_ipv6()
+    }
+    class PdfRenderer {
+        +render()
+        -_merge_diagram()
+        -_render_line()
+    }
+    class UsageTracker {
+        -__init__()
+        +record()
+        -_week_start()
+        -_load()
+        -_save()
+    }
+    class JobProcessor {
+        -__init__()
+        +process()
+        -_execute()
+        -_enforce_quality()
+        -_maybe_escalate()
+        -_fetch_openrouter_balance()
+        -_update_session_cache()
+    }
+    class Dispatcher {
+        -__init__()
+        +run()
+        -_cleanup_zombies()
+    }
+
+    JobRepository ..> claude_pro_batch : reads/writes
+    JobRepository ..> ki_localhost_cache : get_context_blocks
+    JobRepository ..> ki_infrastructure : get_context_blocks
+    JobRepository --> JobRecord : maps row to
+    ModelRunner <|-- OpenRouterRunner
+    ModelRunner <|-- ClaudeCliRunner
+    JobProcessor --> JobRepository
+    JobProcessor --> ModelRunner
+    JobProcessor --> ContextBuilder
+    JobProcessor --> Notifier
+    JobProcessor --> UsageTracker
+    JobProcessor --> RunResult
+    Dispatcher --> Notifier
+    Dispatcher --> JobProcessor
+    ContextBuilder --> JobRepository
+    Notifier --> PdfRenderer
+
+</script>
+
+<script id="src-seq" type="text/x-mermaid">
+sequenceDiagram
+    participant Cron
+    participant Dispatcher
+    participant Poller
+    participant Repo as JobRepository
+    participant Ctx as ContextBuilder
+    participant Runner as ModelRunner
+    participant Agent as OpenRouter/Claude
+    participant Notify as Notifier
+
+    Cron->>Dispatcher: every minute
+    Dispatcher->>Repo: cleanup_zombies()
+    note over Repo: dead PID + result: done<br>dead PID no result: failed
+    Dispatcher->>Poller: spawn N instances
+
+    Poller->>Repo: claim_next() [SELECT FOR UPDATE]
+    Repo-->>Poller: JobRecord
+
+    Poller->>JobProcessor: process(job)
+    JobProcessor->>Ctx: build_prompt(job)
+    Ctx->>Repo: get_context_blocks()
+    Ctx-->>JobProcessor: prompt + infra context
+
+    JobProcessor->>Runner: run(prompt, system_prompt, ...)
+    loop Agentic Loop
+        Runner->>Agent: API call
+        Agent-->>Runner: tool_call exec
+        Runner->>Runner: _exec_tool(bash cmd)
+        Runner-->>Agent: tool result
+    end
+    Agent-->>Runner: finish_reason=stop
+    Runner-->>JobProcessor: RunResult
+
+    JobProcessor->>Repo: complete_job(job_id, run)
+    JobProcessor->>Notify: notify(job, run)
+    Notify->>Notify: _mail(job, run)
+    Notify->>Notify: _mqtt(job, run)
+    Notify-->>Poller: done
+
+</script>
+
+<script id="src-modules" type="text/x-mermaid">
+graph LR
+    subgraph dispatcher[dispatcher.py]
+        D[Dispatcher]
+    end
+    subgraph poller[poller.py]
+        P[Poller]
+    end
+    subgraph repository[repository.py]
+        R[JobRepository]
+    end
+    subgraph runners["runners/"]
+        OR[OpenRouterRunner]
+        CC[ClaudeCliRunner]
+    end
+    subgraph context[context.py]
+        CB[ContextBuilder]
+    end
+    subgraph notify[notifier.py]
+        N[Notifier]
+        PR[PdfRenderer]
+    end
+    subgraph tracker[tracker.py]
+        UT[UsageTracker]
+    end
+    subgraph diagram[diagram.py]
+        DG[ClassDiagram]
+    end
+    subgraph db["MariaDB wagodb"]
+        T1[claude_pro_batch]
+        T2[ki_localhost_cache]
+        T3[ki_infrastructure]
+    end
+
+    D --> P
+    P --> R
+    P --> CB
+    P --> OR
+    P --> CC
+    P --> N
+    P --> UT
+    R --> T1
+    R --> T2
+    R --> T3
+    CB --> R
+    N --> PR
+
+</script>
+
+<script id="src-flow" type="text/x-mermaid">
+flowchart TD
+    Start([Cron trigger]) --> Spawn[Spawn Dispatcher]
+    Spawn --> Zombies[cleanup_zombies]
+    Zombies --> CalcSlots[Calculate free slots]
+    CalcSlots -->|no slots| Wait([Wait next cron])
+    CalcSlots -->|slots free| Poller[Spawn Poller process]
+
+    Poller --> Claim[claim_next
+SELECT FOR UPDATE]
+    Claim -->|no job| Wait
+    Claim -->|job found| Context[build_prompt]
+    Context --> LoadCtx[get_context_blocks]
+    LoadCtx --> Cache{resume_session?}
+    Cache -->|yes| SessionCache[Load session cache]
+    Cache -->|no| BuildPrompt
+    SessionCache --> BuildPrompt[Assemble prompt]
+    BuildPrompt --> SelectRunner{model type}
+
+    SelectRunner -->|openrouter model| ORRunner[OpenRouterRunner.run]
+    SelectRunner -->|sonnet/opus| CLIRunner[ClaudeCliRunner.run]
+
+    ORRunner --> APICall[_call_api_with_retry]
+    APICall --> ToolCall{tool_call?}
+    ToolCall -->|yes| ExecTool[_exec_tool bash]
+    ExecTool --> TruncCheck{output > MAX?}
+    TruncCheck -->|yes| Truncate[UTF-8 safe truncate]
+    TruncCheck -->|no| ReturnTool
+    Truncate --> ReturnTool[Return tool result]
+    ReturnTool --> APICall
+    ToolCall -->|no finish| CheckEsc[Check escalation]
+
+    CLIRunner --> Subprocess[subprocess claud]
+    Subprocess --> CheckEsc
+
+    CheckEsc -->|needs escalation| Escalate[escalate_to_sonnet]
+    CheckEsc -->|ok| CompleteJob
+    Escalate --> CompleteJob
+
+    CompleteJob[complete_job] --> DBCheck{DB status?}
+    DBCheck -->|done + result| KeepResult[Keep agent result
+Update tokens only]
+    DBCheck -->|running| NormalWrite[write_result
+Status + Result + Tokens]
+    KeepResult --> FallbackCheck
+    NormalWrite --> FallbackCheck{result empty?}
+    FallbackCheck -->|yes| FallbackText[Write fallback text]
+    FallbackCheck -->|no| RecordUsage
+    FallbackText --> RecordUsage
+
+    RecordUsage[UsageTracker.record] --> FetchBalance[Fetch OpenRouter balance]
+    FetchBalance --> NotifyCheck{final_status == done
+AND not killed?}
+    NotifyCheck -->|yes| Notify[Notifier.notify]
+    NotifyCheck -->|no| UpdateCache
+    Notify --> SendMail[_mail → PDF render]
+    SendMail --> SendMQTT[_mqtt → Mosquitto]
+    SendMQTT --> UpdateCache
+
+    UpdateCache[Update session cache] --> Done([Job complete])
+
+</script>
+
+<script>
+mermaid.initialize({
+  startOnLoad: false,
+  theme: 'dark',
+  themeVariables: {
+    darkMode: true,
+    background: '#0d1117',
+    primaryColor: '#1f6feb',
+    primaryTextColor: '#c9d1d9',
+    primaryBorderColor: '#30363d',
+    lineColor: '#58a6ff',
+    secondaryColor: '#161b22',
+    tertiaryColor: '#21262d',
+    fontSize: '13px'
+  },
+  class: { useMaxWidth: true },
+  sequence: { useMaxWidth: true, actorMargin: 50 },
+  flowchart: { useMaxWidth: true, curve: 'basis' }
+});
+
+const diagrams = [
+  { id: 'class', src: 'src-class', wrap: 'wrap-class', card: 'card-class' },
+  { id: 'seq', src: 'src-seq', wrap: 'wrap-seq', card: 'card-seq' },
+  { id: 'modules', src: 'src-modules', wrap: 'wrap-modules', card: null },
+  { id: 'flow', src: 'src-flow', wrap: 'wrap-flow', card: null }
+];
+
+async function renderAll() {
+  for (const d of diagrams) {
+    const srcEl = document.getElementById(d.src);
+    const wrapEl = document.getElementById(d.wrap);
+    const code = srcEl.textContent.trim();
+    try {
+      const { svg } = await mermaid.render('svg-' + d.id, code);
+      wrapEl.innerHTML = svg;
+      wrapEl.classList.remove('loading');
+      const btn = wrapEl.parentElement.querySelector('.fs-btn');
+      if (btn) btn.disabled = false;
+    } catch (e) {
+      wrapEl.innerHTML = '<pre style="color:#f85149;font-size:.75rem">' +
+        d.id + ': ' + e.message + '</pre>';
+      wrapEl.classList.remove('loading');
+    }
+  }
+}
+renderAll();
+
+// Fullscreen logic
+const overlay = document.getElementById('fs-overlay');
+const inner = document.getElementById('fs-inner');
+const label = document.getElementById('fs-label');
+let scale = 1, panX = 0, panY = 0;
+
+document.querySelectorAll('.fs-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const target = btn.dataset.target;
+    const wrap = document.getElementById('wrap-' + target);
+    const svg = wrap.querySelector('svg');
+    if (!svg) return;
+    inner.innerHTML = '';
+    inner.appendChild(svg.cloneNode(true));
+    label.textContent = target;
+    scale = 1; panX = 0; panY = 0;
+    updateTransform();
+    overlay.classList.add('open');
+  });
+});
+
+document.getElementById('btn-close').onclick = () => overlay.classList.remove('open');
+document.getElementById('btn-zoomin').onclick = () => { scale *= 1.3; updateTransform(); };
+document.getElementById('btn-zoomout').onclick = () => { scale /= 1.3; updateTransform(); };
+document.getElementById('btn-reset').onclick = () => { scale=1; panX=0; panY=0; updateTransform(); };
+document.addEventListener('keydown', e => { if (e.key === 'Escape') overlay.classList.remove('open'); });
+
+const viewport = document.getElementById('fs-viewport');
+viewport.addEventListener('wheel', e => {
+  e.preventDefault();
+  scale *= e.deltaY < 0 ? 1.1 : 0.9;
+  updateTransform();
+}, { passive: false });
+
+let dragging = false, dragStartX, dragStartY;
+viewport.addEventListener('mousedown', e => {
+  dragging = true;
+  dragStartX = e.clientX - panX;
+  dragStartY = e.clientY - panY;
+  viewport.classList.add('grabbing');
+});
+document.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  panX = e.clientX - dragStartX;
+  panY = e.clientY - dragStartY;
+  updateTransform();
+});
+document.addEventListener('mouseup', () => {
+  dragging = false;
+  viewport.classList.remove('grabbing');
+});
+
+function updateTransform() {
+  inner.style.transform = `translate(${panX}px,${panY}px) scale(${scale})`;
+}
+</script>
+
+</body>
+</html>
