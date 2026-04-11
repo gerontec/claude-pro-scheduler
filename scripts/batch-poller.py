@@ -25,14 +25,14 @@ USAGE_FILE       = '/home/gh/.claude_weekly_usage.json'
 LOCK             = '/tmp/claude-pro-poller.lock'
 MAX_RUNNING      = 9
 CLAUDE_BIN       = '/usr/local/bin/claude'
-QWEN_BIN         = '/usr/bin/qwen'
 OPENROUTER_URL      = 'https://openrouter.ai/api/v1/chat/completions'
 OPENROUTER_CREDITS  = 'https://openrouter.ai/api/v1/credits'
 # OpenRouter-Modelle: job.model → OpenRouter-ID
 OPENROUTER_MODELS = {
-    'xiaomi':    'xiaomi/mimo-v2-flash',  # $0.09/$0.29 per M tok
-    'mimo-pro':  'xiaomi/mimo-v2-pro',   # $1/$3 per M tok
-    # Claude-Modelle NIEMALS hier — nur via eigenem Jahresabo (Claude CLI)
+    'qwen':      'qwen/qwen3-coder',        # $0.22/$1.00 per M tok via OpenRouter
+    'qwen-free': 'qwen/qwen3-coder:free',   # free, rate-limited via OpenRouter
+    'xiaomi':    'xiaomi/mimo-v2-flash',     # $0.09/$0.29 per M tok
+    'mimo-pro':  'xiaomi/mimo-v2-pro',      # $1/$3 per M tok
 }
 # Key aus Datei lesen
 _key_file = os.path.expanduser('~/openrouter.key')
@@ -313,55 +313,8 @@ try:
     pre_in, pre_out, pre_cache, pre_cost, pre_tasks = load_usage()
 
     # ── Modell ausführen ─────────────────────────────────
-    if model == 'qwen':
-        # ── Qwen CLI (kostenlos, kein Limit) ──────────
-        TIMEOUT_SEC = 2 * 3600  # 2 Stunden
-        timed_out   = False
-
-        try:
-            proc = subprocess.run(
-                [
-                    QWEN_BIN,
-                    '--yolo',
-                    '--append-system-prompt', system_prompt,
-                    prompt,
-                ],
-                input='',
-                capture_output=True,
-                text=True,
-                timeout=TIMEOUT_SEC,
-            )
-            exit_code = proc.returncode
-            raw       = proc.stdout.strip()
-        except subprocess.TimeoutExpired:
-            raw       = ''
-            timed_out = True
-            exit_code = -1
-
-        if timed_out:
-            result    = f'Timeout: Qwen-Job lief länger als {TIMEOUT_SEC//3600} Stunden.'
-            in_tok    = out_tok = cache_tok = 0
-            cost      = 0.0
-            status    = 'failed'
-            error     = f'Timeout nach {TIMEOUT_SEC//3600}h'
-        elif exit_code != 0:
-            result    = raw if raw else proc.stderr.strip()
-            in_tok    = out_tok = cache_tok = 0
-            cost      = 0.0
-            status    = 'failed'
-            error     = f'Exit-Code {exit_code}: {result[:200]}'
-        else:
-            result    = raw
-            in_tok    = out_tok = cache_tok = 0
-            cost      = 0.0
-            status    = 'done'
-            error     = ''
-
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: "
-              f"Qwen {'OK' if status == 'done' else 'FEHLER'} (exit={exit_code})", file=sys.stderr)
-
-    elif model in OPENROUTER_MODELS:
-        # ── OpenRouter (Xiaomi MiMo / MiMo-Pro / …) ──
+    if model in OPENROUTER_MODELS:
+        # ── OpenRouter (qwen, xiaomi, mimo-pro) ────────
         try:
             r         = run_openrouter(prompt, system_prompt, OPENROUTER_MODELS[model])
             result    = r['result']
