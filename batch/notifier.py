@@ -54,8 +54,8 @@ class Notifier:
             # Diagramm-PDF laden (dot -Tpdf, Vektorgrafik)
             import os as _os, subprocess as _sp
             diagram_pdf = None
-            job_dot = f'/tmp/ki-diagram-{job_id}.dot'
-            job_pdf = f'/tmp/ki-diagram-{job_id}.pdf'
+            job_dot = f'/var/www/html/api/batch/doc/ki-diagram-{job_id}.dot'
+            job_pdf = f'/var/www/html/api/batch/doc/ki-diagram-{job_id}.pdf'
             try:
                 if _os.path.exists(job_dot):
                     # Agent hat DOT-Quelltext hinterlegt → zu PDF rendern

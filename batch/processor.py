@@ -1,11 +1,12 @@
 """JobProcessor — orchestriert einen einzelnen Job von Claim bis Notify."""
+import re
 import subprocess
 import sys
-import urllib.request
-import json
 from datetime import datetime
 
-from .config import OPENROUTER_MODELS, OPENROUTER_CREDITS, OPENROUTER_KEY_FILE
+from .config import (OPENROUTER_MODELS,
+                     CACHE_SAVER_SCRIPT, CACHE_SAVER_LOG, load_openrouter_key)
+from .runners.openrouter_http import OpenRouterHttpClient
 from .context import ContextBuilder
 from .models import JobRecord, RunResult
 from .notifier import Notifier
@@ -13,9 +14,7 @@ from .repository import JobRepository
 from .runners import ModelRunner
 from .tracker import UsageTracker
 
-import os
-_OR_KEY = open(OPENROUTER_KEY_FILE).read().strip() \
-    if os.path.exists(OPENROUTER_KEY_FILE) else ''
+_http_client = OpenRouterHttpClient(load_openrouter_key())
 
 
 class JobProcessor:
@@ -38,6 +37,7 @@ class JobProcessor:
         try:
             run = self._execute(job)
             run = self._maybe_escalate(job, run)
+            run = self._enforce_quality(job, run)      # Quality-Gate vor Write
             final_status = self._repo.complete_job(job.id, run)
             self._tracker.record(run)
             self._fetch_openrouter_balance(job.id)
@@ -99,6 +99,47 @@ class JobProcessor:
 
         return run
 
+    _QUALITY_MIN_CHARS    = 400
+    _QUALITY_MIN_SECTIONS = 2   # Anzahl ##-Überschriften
+
+    def _enforce_quality(self, job: JobRecord, run: RunResult) -> RunResult:
+        """Quality-Gate: schlägt der Check fehl, wird der Job auf 'failed' gesetzt.
+
+        Nur 'done'-Jobs werden geprüft — failed/killed bleiben unverändert.
+        Der Agent kann prompt-seitig angewiesen werden ausführlich zu schreiben,
+        aber erst dieser Check erzwingt es strukturell.
+        """
+        if run.status != 'done':
+            return run
+
+        result = run.result or ''
+        errors = []
+
+        if len(result.strip()) < self._QUALITY_MIN_CHARS:
+            errors.append(
+                f'Ergebnis zu kurz ({len(result.strip())} Zeichen, Minimum {self._QUALITY_MIN_CHARS})'
+            )
+
+        sections = len(re.findall(r'^#{1,3} .+', result, re.MULTILINE))
+        if sections < self._QUALITY_MIN_SECTIONS:
+            errors.append(
+                f'Zu wenige Abschnitte ({sections} ##-Überschriften, Minimum {self._QUALITY_MIN_SECTIONS})'
+            )
+
+        if not errors:
+            return run
+
+        quality_error = 'Qualitäts-Gate: ' + '; '.join(errors)
+        new_id = self._repo.requeue_with_quality_feedback(job.id, quality_error)
+        print(
+            f"[{datetime.now().strftime('%H:%M:%S')}] "
+            f"Job #{job.id}: {quality_error} → neu eingereiht als Job #{new_id}",
+            file=sys.stderr,
+        )
+        run.status = 'failed'
+        run.error  = f'{quality_error} → Job #{new_id} neu eingereiht'
+        return run
+
     def _maybe_escalate(self, job: JobRecord, run: RunResult) -> RunResult:
         """Eskaliert zu Sonnet wenn Modell Bedenken geäußert hat."""
         if not ContextBuilder.needs_escalation(job.model, run.result, OPENROUTER_MODELS):
@@ -114,22 +155,16 @@ class JobProcessor:
         return run
 
     def _fetch_openrouter_balance(self, job_id: int) -> None:
-        if not _OR_KEY:
+        if not _http_client._api_key:
             return
         try:
-            req = urllib.request.Request(
-                OPENROUTER_CREDITS,
-                headers={'Authorization': f'Bearer {_OR_KEY}'},
+            bal = _http_client.get_credits()
+            self._repo.save_openrouter_balance(
+                job_id, bal['remaining'], bal['total'], bal['used']
             )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                cr = json.loads(resp.read())['data']
-            total     = float(cr.get('total_credits', 0))
-            used      = float(cr.get('total_usage', 0))
-            remaining = round(total - used, 6)
-            self._repo.save_openrouter_balance(job_id, remaining, total, used)
             print(
                 f"[{datetime.now().strftime('%H:%M:%S')}] "
-                f"OpenRouter Guthaben: ${remaining:.4f}",
+                f"OpenRouter Guthaben: ${bal['remaining']:.4f}",
                 file=sys.stderr,
             )
         except Exception as e:
@@ -142,7 +177,7 @@ class JobProcessor:
     @staticmethod
     def _update_session_cache() -> None:
         subprocess.run(
-            ['python3', '/home/gh/cache-saver.py', '--compact'],
-            stdout=open('/tmp/cache-saver.log', 'a'),
+            ['python3', CACHE_SAVER_SCRIPT, '--compact'],
+            stdout=open(CACHE_SAVER_LOG, 'a'),
             stderr=subprocess.STDOUT,
         )

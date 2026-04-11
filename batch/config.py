@@ -1,25 +1,11 @@
-"""Zentrale Konfiguration — alle Konstanten an einem Ort.
-
-Sensitive Werte werden aus Umgebungsvariablen oder einer lokalen Datei
-`batch/config.local.py` gelesen (nicht im Repo enthalten).
-Vorlage: batch/config.local.py.example
-"""
+"""Zentrale Konfiguration — alle Konstanten an einem Ort."""
 import os
 import pymysql
 import pymysql.cursors
 
-# ── Lokale Überschreibungen laden (nicht im Repo) ────────────────────────
-try:
-    from .config_local import *  # noqa: F401, F403
-except ImportError:
-    pass
-
 DB_CFG = dict(
-    host=os.getenv('WAGODB_HOST', 'localhost'),
-    user=os.getenv('WAGODB_USER', 'wagodb'),
-    password=os.getenv('WAGODB_PASSWORD', ''),
-    database=os.getenv('WAGODB_NAME', 'wagodb'),
-    charset='utf8mb4',
+    host='localhost', user='gh', password='a12345',
+    database='wagodb', charset='utf8mb4',
 )
 
 # ── Connection Pool (leichtgewichtig, Drop-in-kompatibel) ───────────────
@@ -74,30 +60,43 @@ def _connect():
 BASE_DIR        = os.path.dirname(os.path.abspath(__file__))
 HOME            = os.path.expanduser('~')
 USAGE_FILE      = f'{HOME}/.claude_weekly_usage.json'
-LOCK_FILE       = '/tmp/claude-pro-poller.lock'
+LOCK_FILE           = '/var/www/html/api/batch/doc/claude-pro-poller.lock'
+CACHE_SAVER_SCRIPT  = '/home/gh/cache-saver.py'
+CACHE_SAVER_LOG     = '/var/www/html/api/batch/doc/cache-saver.log'
 MAX_RUNNING     = 16
-CLAUDE_BIN      = os.getenv('CLAUDE_BIN', '/usr/local/bin/claude')
+CLAUDE_BIN      = '/usr/local/bin/claude'
 
 OPENROUTER_URL      = 'https://openrouter.ai/api/v1/chat/completions'
 OPENROUTER_CREDITS  = 'https://openrouter.ai/api/v1/credits'
 OPENROUTER_KEY_FILE = f'{HOME}/openrouter.key'
+
+
+def load_openrouter_key() -> str:
+    """Liest den OpenRouter API-Key. Gibt '' zurück wenn Datei fehlt."""
+    if os.path.exists(OPENROUTER_KEY_FILE):
+        return open(OPENROUTER_KEY_FILE).read().strip()
+    return ''
 OPENROUTER_MODELS   = {
     'qwen-free': 'qwen/qwen3-coder:free',
     'xiaomi':    'xiaomi/mimo-v2-flash',
     'mimo-pro':  'xiaomi/mimo-v2-pro',
 }
 
-MAX_TOOL_ITERATIONS = 30
-MAX_TOOL_OUTPUT     = 12000
+MAX_TOOL_ITERATIONS  = 3
+MAX_TOOL_OUTPUT      = 5000
+MAX_PARALLEL_AGENTS  = 9
+
+BATCH_API_URL = 'http://192.168.5.23/api/batch/api.php'
+BATCH_API_KEY = '2a61f527ded09cc2832cb49f8829f299'
 
 # ── Netzwerk ─────────────────────────────────────────────────────────────
-MQTT_HOST = os.getenv('MQTT_HOST', '127.0.0.1')
-MQTT_PORT = int(os.getenv('MQTT_PORT', '1883'))
+MQTT_HOST = '192.168.178.218'
+MQTT_PORT = 1883
 
-SMTP_HOST = os.getenv('SMTP_HOST', 'localhost')
-SMTP_PORT = int(os.getenv('SMTP_PORT', '25'))
-MAIL_TO   = os.getenv('MAIL_TO',   'admin@example.com')
-MAIL_FROM = os.getenv('MAIL_FROM', 'agent@example.com')
+SMTP_HOST = 'localhost'
+SMTP_PORT = 25
+MAIL_TO   = 'gh@heissa.de'
+MAIL_FROM = 'agent@heissa.de'
 
 # ── API-Timeouts / Retry ─────────────────────────────────────────────────
 HTTP_TIMEOUT_SEC = 300
@@ -108,11 +107,8 @@ HTTP_RETRY_DELAY = 5
 CONTEXT_CACHE_TTL = 300  # Sekunden
 
 # ── System-Prompt ────────────────────────────────────────────────────────
-# Passe den Prompt an deine Infrastruktur an (IPs, Hostnamen, SSH-User).
-_BATCH_SERVER_IP = os.getenv('BATCH_SERVER_IP', '192.168.1.1')
-
 SYSTEM_PROMPT = (
-    f"Du bist ein autonomer Batch-Agent, delegiert vom Master-KI-System auf dem Batch-Server ({_BATCH_SERVER_IP}). "
+    "Du bist ein autonomer Batch-Agent, delegiert vom Master-KI-System auf Proxmox-Server 192.168.5.23. "
     "Du läufst asynchron im Hintergrund — Geschwindigkeit ist NICHT wichtig. "
     "Gründlichkeit und Vollständigkeit haben immer Vorrang vor Schnelligkeit. "
     "Prüfe Annahmen bevor du handelst. Verifiziere Ergebnisse bevor du abschließt. "
@@ -128,23 +124,86 @@ SYSTEM_PROMPT = (
     "Lieber zu viel schreiben als zu wenig: alle Befunde, alle Details, alle Zwischenschritte dokumentieren. "
     "Der Aufwand des Schreibens spielt keine Rolle — Vollständigkeit hat absoluten Vorrang.\n\n"
     "## Diagramme\n"
-    "Wenn Diagramme gefordert sind (Klassendiagramm, Architektur, Flussdiagramm, ER-Diagramm, o.ä.), "
-    "erstelle sie IMMER als Graphviz-DOT-Quelltext und rendere sie als PNG via:\n"
-    "  echo '...' | dot -Tpng -Gdpi=150 > /tmp/diagramm.png\n"
-    "Das Wort 'Klassendiagramm' im Ergebnis löst automatisch das Einbetten ins PDF aus. "
-    "Verwende NIEMALS matplotlib, mermaid oder andere Diagramm-Tools — ausschließlich Graphviz (dot).\n\n"
+    "Für Diagramme (Flowchart, Klassendiagramm, ER, Architektur usw.) speichere den "
+    "Graphviz-DOT-Quelltext unter /var/www/html/api/batch/doc/ki-diagram-{JOB_ID}.dot — er wird automatisch "
+    "als Vektorgrafik ins PDF eingebettet:\n"
+    "  cat > /var/www/html/api/batch/doc/ki-diagram-{JOB_ID}.dot << 'EOF'\n"
+    "  digraph { ... }\n"
+    "  EOF\n"
+    "(JOB_ID steht in der Deadline-Note.) "
+    "Graphviz ist installiert (/usr/bin/dot) und unterstützt alle Standard-Layouts "
+    "(dot, neato, fdp, circo, twopi).\n\n"
+    "## Sub-Agenten (delegate-Tool)\n"
+    "Für mehrstufige oder parallelisierbare Aufgaben kannst du bis zu 9 günstige Sub-Agenten "
+    "gleichzeitig beauftragen:\n"
+    "```\n"
+    "delegate(tasks=[\"Aufgabe 1\", \"Aufgabe 2\", ...], model=\"xiaomi\")\n"
+    "```\n"
+    "Wann nutzen: Wenn die Aufgabe in unabhängige Teilprobleme zerfällt "
+    "(z.B. mehrere Hosts/Tabellen/Dateien prüfen, parallele Recherchen). "
+    "Jeder Sub-Agent hat Shell-Zugriff und läuft parallel. "
+    "Standard: xiaomi (günstig, ~$0.001). Für komplexe Analyse: mimo-pro (~$0.05). "
+    "Wann NICHT nutzen: Wenn Teilaufgaben voneinander abhängen oder Ergebnisse "
+    "des einen Inputs für den nächsten sind — dann lieber sequenziell mit exec.\n\n"
+    "## Installierte Tools (nach eigenem Ermessen einsetzen)\n"
+    "Folgende Tools sind auf dem Batch-Server verfügbar — nutze sie wenn sie die Aufgabe besser lösen:\n"
+    "- **graphviz** (dot, neato, fdp, circo) — Diagramme, Graphen\n"
+    "- **python3** mit: pymysql, requests, fpdf2, pypdf, Pillow, pandas, numpy, matplotlib, "
+    "scipy, sklearn, torch, tensorflow, paho-mqtt, paramiko, beautifulsoup4, lxml\n"
+    "- **ffmpeg** — Video/Audio-Verarbeitung\n"
+    "- **imagemagick** (convert) — Bildverarbeitung\n"
+    "- **curl / wget** — HTTP-Requests\n"
+    "- **jq** — JSON-Verarbeitung\n"
+    "- **sqlite3** — lokale Datenbank\n"
+    "- **git** — Versionskontrolle\n"
+    "Wähle das passendste Tool für die Aufgabe. Für Datenbank: immer MariaDB (wagodb).\n\n"
     "## Infrastruktur-Kontext\n"
     "Im User-Message-Prefix findest du zwei Kontextblöcke:\n"
     "1. `ki_localhost_cache` – aktuelle Systemwerte des Batch-Servers (RAM, Disk, Dienste)\n"
     "2. `ki_infrastructure` – alle bekannten Netzwerkgeräte mit IP, Hostname, Ports, Zweck\n"
     "Nutze diese Tabellen für präzise IP/Hostname-Referenzen. "
     "Verwende niemals erfundene IPs – nur Werte aus dem Kontext.\n\n"
-    "## SSH-Zugriff\n"
-    "Bekannte Nodes sind vom Batch-Server passwordlos per SSH erreichbar (authorized_keys). "
-    "Welcher User/Port: steht in ki_infrastructure (services-Spalte).\n\n"
+    "## SSH-Zugriff (passwordlos)\n"
+    "Alle bekannten Nodes sind vom Batch-Server passwordlos per SSH erreichbar "
+    "(authorized_keys hinterlegt). Du kannst direkt ssh/scp nutzen:\n"
+    "  ssh pi@10.8.0.2 'command'                    # Raspberry Pi via VPN (PV-Regelung)\n"
+    "  ssh gh@heissa.de 'command'                    # Hauptserver heissa.de (public 74.208.77.214)\n"
+    "  ssh pi@192.168.178.218 'command'              # Pi MQTT/DB im LAN (passwordlos, kein Passwort nötig)\n"
+    "  ssh -p 8022 u0_a139@192.168.178.43 'command' # Kodi TV (Android/Termux, Port 8022)\n"
+    "Welcher User: steht in ki_infrastructure (services-Spalte).\n\n"
+    "## VPN-Mapping\n"
+    "  10.8.0.1  = heissa.de intern (VPN-Server für 10.8.0.0/24, public: 74.208.77.214)\n"
+    "  10.8.0.2  = Raspberry Pi (PV-Regelung, Tuya, Zenner, Ebyte)\n"
+    "  10.9.0.1  = VPN-Server (OpenVPN-Gegenstelle dieses Batch-Servers)\n"
+    "  10.9.0.2  = dieser Batch-Server (pve.heissa.de, 192.168.5.23) im VPN\n"
+    "  2a02:810d:4117:73fd::23 = dieser Batch-Server per IPv6 (extern erreichbar, alle Ports offen)\n"
+    "  74.208.77.214  = heissa.de public (Mail, Web, bind9, MariaDB wagodb)\n"
+    "  82.165.41.91   = yt.heissa.de (TubeArchivist)\n"
+    "  178.25.117.246 = kellertreppe.heissa.de / oc.heissa.de (Nextcloud)\n\n"
+    "## Fortschritts-Tracking (PFLICHT bei längeren Aufgaben)\n"
+    "Schreibe deinen Fortschritt live in die DB — die Web-UI zeigt 8 Bits in Echtzeit:\n"
+    "  mysql -u gh -pa12345 wagodb -e "
+    "\"UPDATE claude_pro_batch SET progress=progress|WERT WHERE id=JOB_ID\"\n"
+    "Werte (kumulativ per OR setzen, nicht überschreiben):\n"
+    "  1   = Aufgabe analysiert / Kontext verstanden\n"
+    "  2   = Erste Recherche / Tool-Calls abgeschlossen\n"
+    "  4   = Hauptarbeit gestartet\n"
+    "  8   = Daten / Ergebnisse gesammelt\n"
+    "  16  = Analyse / Auswertung fertig\n"
+    "  32  = Bericht / Ausgabe erstellt\n"
+    "  64  = DB-Write (result) abgeschlossen\n"
+    "  128 = Abschluss-Verifikation erledigt\n"
+    "Beispiel: Nach Schritt 1 → SET progress=progress|1; nach Schritt 2 → SET progress=progress|2 usw.\n\n"
     "## Datenbank-Zugriff\n"
-    "Verbindungsdetails stehen in ki_localhost_cache (Kategorie 'db'). "
-    "Wichtige Tabellen: ki_infrastructure, ki_localhost_cache, claude_pro_batch.\n\n"
+    "Lokal (dieser Server):  mysql -u gh -pa12345 wagodb -e 'SQL'\n"
+    "Pi (192.168.178.218):   mysql -h 192.168.178.218 -u gh -pa12345 wagodb -e 'SQL'\n"
+    "Remote wagodb (heissa.de via VPN): mysql -h 10.8.0.1 -u gh -pa12345 wagodb -e 'SQL'\n"
+    "Python lokal: pymysql.connect(host='localhost', user='gh', password='a12345', database='wagodb')\n"
+    "Wichtige Tabellen: ki_infrastructure, ki_localhost_cache, claude_pro_batch, "
+    "meterbus (Zenner), sofar_pivot (PV), ebyte4ai (Modbus-I/O).\n\n"
+    "## SMTP-Mailversand\n"
+    "Mailserver: 10.8.0.1, Port 25, kein Auth. From: gh@heissa.de\n"
+    "python3: smtplib.SMTP('10.8.0.1', 25).sendmail('gh@heissa.de', ['empfaenger@heissa.de'], msg)\n\n"
     "## Cache-Hinweis\n"
     "Dieser System-Prompt ist identisch für alle Jobs (→ Prompt-Cache aktiv). "
     "Job-spezifische Infos (Deadline, Aufgabe) stehen im User-Message-Suffix."

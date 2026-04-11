@@ -8,8 +8,9 @@ import urllib.request
 from datetime import datetime
 from typing import Callable
 
-from ..config import (OPENROUTER_URL, MAX_TOOL_ITERATIONS, MAX_TOOL_OUTPUT,
-                      HTTP_TIMEOUT_SEC, HTTP_RETRIES, HTTP_RETRY_DELAY)
+from ..config import (MAX_TOOL_ITERATIONS, MAX_TOOL_OUTPUT,
+                      BATCH_API_URL, BATCH_API_KEY, MAX_PARALLEL_AGENTS)
+from .openrouter_http import OpenRouterHttpClient
 from ..models import RunResult
 from .base import ModelRunner
 
@@ -39,14 +40,58 @@ TOOLS = [
                 'required': ['command'],
             },
         },
-    }
+    },
+    {
+        'type': 'function',
+        'function': {
+            'name': 'delegate',
+            'description': (
+                'Beauftrage bis zu 9 günstige Sub-Agenten PARALLEL mit unabhängigen Teilaufgaben. '
+                'Jeder Sub-Agent hat Shell-Zugriff (exec) und kann DB/Netzwerk abfragen. '
+                'Nutze dies wenn die Hauptaufgabe in parallele Teilprobleme zerfällt '
+                '(z.B. mehrere Hosts prüfen, mehrere Tabellen analysieren, mehrere Dateien auswerten). '
+                'Alle Sub-Agenten laufen gleichzeitig — Ergebnisse werden gesammelt zurückgegeben. '
+                'Standard-Modell: xiaomi (günstig). Für komplexe Analyse: mimo-pro.'
+            ),
+            'parameters': {
+                'type': 'object',
+                'properties': {
+                    'tasks': {
+                        'type': 'array',
+                        'description': 'Liste von Aufgaben-Prompts für Sub-Agenten (max 9)',
+                        'items': {'type': 'string'},
+                        'maxItems': 9,
+                    },
+                    'model': {
+                        'type': 'string',
+                        'description': 'Modell für alle Sub-Agenten (default: xiaomi)',
+                        'enum': ['xiaomi', 'mimo-pro'],
+                        'default': 'xiaomi',
+                    },
+                    'timeout_minutes': {
+                        'type': 'integer',
+                        'description': 'Warte-Timeout pro Sub-Job in Minuten (default: 10)',
+                        'default': 10,
+                    },
+                },
+                'required': ['tasks'],
+            },
+        },
+    },
 ]
 
 
 class OpenRouterRunner(ModelRunner):
-    def __init__(self, model_id: str, api_key: str):
-        self.model_id = model_id
-        self.api_key  = api_key
+    def __init__(
+        self, model_id: str, api_key: str,
+        batch_api_url: str = BATCH_API_URL,
+        batch_api_key: str = BATCH_API_KEY,
+    ):
+        self.model_id       = model_id
+        self.api_key        = api_key
+        self._http          = OpenRouterHttpClient(api_key)
+        self._batch_api_url = batch_api_url
+        self._batch_api_key = batch_api_key
 
     def run(
         self,
@@ -72,7 +117,7 @@ class OpenRouterRunner(ModelRunner):
                     cache_tok=total_cache, cost=total_cost, iters=iteration,
                 )
 
-            body = self._call_api_with_retry(messages, system_prompt)
+            body = self._http.chat(self.model_id, messages, system_prompt, TOOLS)
 
             if 'error' in body:
                 raise ValueError(f"OpenRouter API Error: {body['error']}")
@@ -215,54 +260,16 @@ class OpenRouterRunner(ModelRunner):
 
         return '\n'.join(lines)
 
-    def _call_api_with_retry(self, messages: list, system_prompt: str) -> dict:
-        last_err = None
-        for attempt in range(1 + HTTP_RETRIES):
-            try:
-                return self._call_api(messages, system_prompt)
-            except (urllib.error.URLError, urllib.error.HTTPError,
-                    ConnectionError, TimeoutError) as e:
-                last_err = e
-                code = getattr(e, 'code', 0)
-                if code in (400, 401, 403, 404):
-                    raise
-                if attempt < HTTP_RETRIES:
-                    wait = HTTP_RETRY_DELAY * (2 ** attempt)
-                    print(f"    [Retry {attempt+1}] {e} — warte {wait}s", file=sys.stderr)
-                    time.sleep(wait)
-        raise last_err
-
-    def _call_api(self, messages: list, system_prompt: str) -> dict:
-        payload = json.dumps({
-            'model':       self.model_id,
-            'messages':    [{'role': 'system', 'content': system_prompt}] + messages,
-            'tools':       TOOLS,
-            'tool_choice': 'auto',
-        }).encode()
-        req = urllib.request.Request(
-            OPENROUTER_URL,
-            data=payload,
-            headers={
-                'Authorization': f'Bearer {self.api_key}',
-                'Content-Type':  'application/json',
-                'HTTP-Referer':  'https://localhost',
-            },
-            method='POST',
-        )
-        with urllib.request.urlopen(req, timeout=HTTP_TIMEOUT_SEC) as resp:
-            raw = resp.read()
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError as e:
-            raise ValueError(
-                f'OpenRouter JSON-Parse-Fehler: {e} | '
-                f'Response-Anfang: {raw[:500]!r}'
-            )
-
     def _parse_args(self, raw: str) -> dict:
         try:
             return json.loads(raw)
-        except (json.JSONDecodeError, Exception):
+        except json.JSONDecodeError as e:
+            # Modell hat kein valides JSON geliefert — XML-ähnlichen Fallback versuchen
+            print(
+                f"    [_parse_args] JSON-Parse fehlgeschlagen: {e} | "
+                f"raw[:120]={raw[:120]!r}",
+                file=sys.stderr,
+            )
             args = {}
             for m in re.finditer(
                 r'<parameter=(\w+)>(.*?)</parameter>', raw, re.DOTALL
@@ -276,7 +283,116 @@ class OpenRouterRunner(ModelRunner):
             timeout = int(float(str(args.get('timeout', 60)).split('>')[0].strip() or 60))
             print(f"    [exec] {cmd[:120]}", file=sys.stderr)
             return self._exec_tool(cmd, timeout)
+        if fn_name == 'delegate':
+            tasks = args.get('tasks', [])
+            model = args.get('model', 'xiaomi')
+            print(
+                f"    [delegate] {len(tasks)} Sub-Job(s) @ {model}",
+                file=sys.stderr,
+            )
+            return self._dispatch_delegate(args)
         return f'Unbekanntes Tool: {fn_name}'
+
+    def _dispatch_delegate(self, args: dict) -> str:
+        """Reicht bis zu MAX_PARALLEL_AGENTS Sub-Jobs ein und wartet auf Ergebnisse."""
+        import threading
+
+        tasks          = args.get('tasks', [])[:MAX_PARALLEL_AGENTS]
+        model          = args.get('model', 'xiaomi')
+        timeout_min    = int(args.get('timeout_minutes', 10))
+        today          = datetime.now().strftime('%Y-%m-%d')
+
+        if not tasks:
+            return 'FEHLER: Keine Aufgaben angegeben'
+        if model not in ('xiaomi', 'mimo-pro'):
+            model = 'xiaomi'
+
+        # ── Alle Jobs parallel einreichen ──────────────────────────
+        job_ids: list[int | None] = [None] * len(tasks)
+
+        def _submit(idx: int, task: str) -> None:
+            try:
+                payload = json.dumps({
+                    'model':      model,
+                    'prompt':     task,
+                    'targetdate': today,
+                }).encode()
+                req = urllib.request.Request(
+                    self._batch_api_url,
+                    data=payload,
+                    headers={
+                        'X-API-Key':    self._batch_api_key,
+                        'Content-Type': 'application/json',
+                    },
+                    method='POST',
+                )
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read())
+                job_ids[idx] = data['id']
+                print(
+                    f"      [delegate] Sub-Job {idx+1} eingereicht → #{data['id']}",
+                    file=sys.stderr,
+                )
+            except Exception as exc:
+                print(
+                    f"      [delegate] Sub-Job {idx+1} Einreichung fehlgeschlagen: {exc}",
+                    file=sys.stderr,
+                )
+
+        threads = [threading.Thread(target=_submit, args=(i, t)) for i, t in enumerate(tasks)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+
+        # ── Auf Ergebnisse warten (Polling) ────────────────────────
+        deadline  = time.time() + timeout_min * 60
+        pending   = {jid for jid in job_ids if jid is not None}
+        results:  dict[int, dict] = {}
+
+        while pending and time.time() < deadline:
+            time.sleep(8)
+            for jid in list(pending):
+                try:
+                    url = (
+                        f"{self._batch_api_url}"
+                        f"?id={jid}&full=1&apikey={self._batch_api_key}"
+                    )
+                    with urllib.request.urlopen(url, timeout=10) as resp:
+                        data = json.loads(resp.read())
+                    if data.get('status') in ('done', 'failed'):
+                        results[jid] = data
+                        pending.discard(jid)
+                        print(
+                            f"      [delegate] Sub-Job #{jid} → {data['status']}",
+                            file=sys.stderr,
+                        )
+                except Exception as exc:
+                    print(
+                        f"      [delegate] Poll-Fehler #{jid}: {exc}",
+                        file=sys.stderr,
+                    )
+
+        # ── Ergebnisse formatieren ─────────────────────────────────
+        lines = [f'## Sub-Agenten-Ergebnisse ({len(tasks)} Jobs, Modell: {model})\n']
+        for i, (task, jid) in enumerate(zip(tasks, job_ids), 1):
+            short_task = task[:120] + ('…' if len(task) > 120 else '')
+            lines.append(f'### Sub-Agent {i} (Job #{jid})')
+            lines.append(f'**Aufgabe:** {short_task}')
+            if jid is None:
+                lines.append('**Status:** Einreichung fehlgeschlagen\n')
+            elif jid in results:
+                r      = results[jid]
+                status = r.get('status', '?')
+                cost   = r.get('cost_usd', '?')
+                result = r.get('result') or '(kein Ergebnis)'
+                lines.append(f'**Status:** {status} | **Kosten:** ${cost}\n')
+                lines.append(result)
+            else:
+                lines.append(f'**Status:** Timeout nach {timeout_min} min\n')
+            lines.append('')
+
+        return '\n'.join(lines)
 
     @staticmethod
     def _exec_tool(command: str, timeout: int = 60) -> str:

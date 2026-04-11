@@ -4,6 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from .config import SYSTEM_PROMPT
+from .context_repo import ContextRepository
 from .models import JobRecord
 
 _TZ = ZoneInfo('Europe/Berlin')
@@ -18,7 +19,7 @@ _ESCALATION_PHRASES = [
 
 
 class ContextBuilder:
-    def __init__(self, repo):
+    def __init__(self, repo: ContextRepository):
         self._repo = repo
 
     def build_prompt(self, job: JobRecord) -> str:
@@ -102,10 +103,10 @@ class ContextBuilder:
             f"Prüfe danach: mysql -u gh -pa12345 wagodb -e "
             f"\"SELECT LEFT(result,200) FROM claude_pro_batch WHERE id={job.id}\"\n"
             f"Beende erst wenn das Ergebnis korrekt in der DB steht.\n\n"
-            f"**WICHTIG:** Schreibe NUR das `result`-Feld. Ändere NICHT den `status` — "
-            f"der Status wird vom Processor gesetzt. Direktes Ändern bricht den "
-            f"Notification-Flow. Die WHERE-Klausel `AND status != 'done'` schützt "
-            f"davor, aber sei dir dessen bewusst.\n\n"
+            f"**VERBOTEN:** Schreibe NIEMALS den `status` — weder 'done' noch etwas anderes. "
+            f"Der Status wird ausschließlich vom Processor nach einem Qualitäts-Check gesetzt. "
+            f"Ein zu kurzes Ergebnis (unter 400 Zeichen oder weniger als 2 ##-Abschnitte) "
+            f"führt automatisch zu status='failed'. Schreibe daher immer einen vollständigen Bericht.\n\n"
             f"**Ergebnis-Qualität — PFLICHT:**\n"
             f"Das Ergebnis muss ein vollständiger, strukturierter Bericht sein. Nicht akzeptabel:\n"
             f"- Einzeilige Zusammenfassungen ('Aufgabe erledigt.')\n"

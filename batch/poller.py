@@ -1,11 +1,11 @@
 """Einstiegspunkt — claimen und verarbeiten eines einzelnen Jobs."""
-import os
 import sys
 
 from .config import (
-    DB_CFG, USAGE_FILE, OPENROUTER_MODELS, OPENROUTER_KEY_FILE,
+    DB_CFG, USAGE_FILE, OPENROUTER_MODELS, load_openrouter_key,
 )
 from .context import ContextBuilder
+from .context_repo import ContextRepository
 from .notifier import Notifier
 from .processor import JobProcessor
 from .repository import JobRepository
@@ -14,8 +14,7 @@ from .tracker import UsageTracker
 
 
 def _build_runners() -> dict:
-    key = open(OPENROUTER_KEY_FILE).read().strip() \
-        if os.path.exists(OPENROUTER_KEY_FILE) else ''
+    key = load_openrouter_key()
     return {
         'qwen-free': OpenRouterRunner(OPENROUTER_MODELS['qwen-free'], key),
         'xiaomi':    OpenRouterRunner(OPENROUTER_MODELS['xiaomi'],    key),
@@ -34,7 +33,7 @@ def main():
 
     notifier  = Notifier()
     tracker   = UsageTracker(USAGE_FILE)
-    context   = ContextBuilder(repo)
+    context   = ContextBuilder(ContextRepository())
     runners   = _build_runners()
     processor = JobProcessor(repo, runners, context, notifier, tracker)
 
