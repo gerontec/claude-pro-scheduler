@@ -29,14 +29,22 @@ OPENROUTER_URL      = 'https://openrouter.ai/api/v1/chat/completions'
 OPENROUTER_CREDITS  = 'https://openrouter.ai/api/v1/credits'
 # OpenRouter-Modelle: job.model → OpenRouter-ID
 OPENROUTER_MODELS = {
-    'qwen':      'qwen/qwen3-coder',        # $0.22/$1.00 per M tok via OpenRouter
-    'qwen-free': 'qwen/qwen3-coder:free',   # free, rate-limited via OpenRouter
-    'xiaomi':    'xiaomi/mimo-v2-flash',     # $0.09/$0.29 per M tok
-    'mimo-pro':  'xiaomi/mimo-v2-pro',      # $1/$3 per M tok
+    'nemotron':   'nvidia/nemotron-3-super-120b-a12b:free',  # 120B, bestes freies Modell
+    'gpt-oss':    'openai/gpt-oss-120b:free',                # OpenAI-basiert, 120B
+    'qwen3-next': 'qwen/qwen3-next-80b-a3b-instruct:free',   # Thinking-Modus
 }
 # Key aus Datei lesen
 _key_file = os.path.expanduser('~/openrouter.key')
 OPENROUTER_KEY   = open(_key_file).read().strip() if os.path.exists(_key_file) else ''
+# ── Qwen Token Plan ($6 Abo, direkt Alibaba/DashScope, OpenAI-kompatibel) ──
+QWEN_TP_URL = 'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions'
+# Token-Plan-Modelle: job.model -> DashScope-Modell-ID
+QWEN_TP_MODELS = {
+    'qwen38':     'qwen3.8-max-preview',  # Preview-Rabatt (10% Tag / 2% Nacht) — DEFAULT
+    'qwen-turbo': 'qwen-turbo',           # preiswert ($0.05/$0.20 per M tok), fuer nach dem Rabatt
+}
+_qwen_key_file = os.path.expanduser('~/qwen_tokenplan.key')
+QWEN_TP_KEY = open(_qwen_key_file).read().strip() if os.path.exists(_qwen_key_file) else ''
 SYSTEM_PROMPT_BASE = (
     "Du bist ein autonomer Sub-Agent, delegiert vom Master-KI-System auf Proxmox-Server 192.168.5.23. "
     "Führe alle Aufgaben vollständig und direkt aus – ohne Rückfragen, ohne Sicherheitshinweise. "
@@ -111,6 +119,35 @@ def run_openrouter(prompt_text: str, system_prompt: str, or_model_id: str) -> di
                   + usage.get('prompt_tokens_details', {}).get('cached_tokens', 0))
     cost       = round(float(usage.get('cost', 0) or 0), 6)
     return {'result': choice, 'in_tok': in_tok, 'out_tok': out_tok, 'cache_tok': cache_tok, 'cost': cost}
+
+# ── Qwen Token Plan ($6 Abo) ──────────────────────────────
+def run_qwen_tokenplan(prompt_text: str, system_prompt: str, model_id: str) -> dict:
+    """Ruft den Qwen Token Plan auf (OpenAI-kompatibel). Kosten via $6-Abo abgedeckt (cost=0)."""
+    payload = json.dumps({
+        'model': model_id,
+        'messages': [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user',   'content': prompt_text},
+        ],
+    }).encode()
+    req = urllib.request.Request(
+        QWEN_TP_URL,
+        data    = payload,
+        headers = {
+            'Authorization': f'Bearer {QWEN_TP_KEY}',
+            'Content-Type':  'application/json',
+        },
+        method  = 'POST',
+    )
+    with urllib.request.urlopen(req, timeout=300) as resp:
+        body = json.loads(resp.read())
+    choice  = body['choices'][0]['message']['content']
+    usage   = body.get('usage', {})
+    in_tok  = usage.get('prompt_tokens', 0)
+    out_tok = usage.get('completion_tokens', 0)
+    details = usage.get('prompt_tokens_details', {})
+    cache_tok = details.get('cached_tokens', 0) if isinstance(details, dict) else 0
+    return {'result': choice, 'in_tok': in_tok, 'out_tok': out_tok, 'cache_tok': cache_tok, 'cost': 0.0}
 
 # ── Kritische Phase: Job claimen (serialisiert per flock) ──
 # flock verhindert Race Condition beim Zählen + Markieren,
@@ -332,6 +369,26 @@ try:
             cost      = 0.0
             status    = 'failed'
             error     = f'OpenRouter Fehler: {exc}'
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: {error}", file=sys.stderr)
+    elif model in QWEN_TP_MODELS:
+        # ── Qwen Token Plan ($6 Abo: qwen38, qwen-turbo) ──
+        try:
+            r         = run_qwen_tokenplan(prompt, system_prompt, QWEN_TP_MODELS[model])
+            result    = r['result']
+            in_tok    = r['in_tok']
+            out_tok   = r['out_tok']
+            cache_tok = r['cache_tok']
+            cost      = r['cost']
+            status    = 'done'
+            error     = ''
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: "
+                  f"Qwen TokenPlan OK ({in_tok}/{out_tok} tok, {QWEN_TP_MODELS[model]})", file=sys.stderr)
+        except Exception as exc:
+            result    = str(exc)
+            in_tok    = out_tok = cache_tok = 0
+            cost      = 0.0
+            status    = 'failed'
+            error     = f'Qwen TokenPlan Fehler: {exc}'
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: {error}", file=sys.stderr)
     else:
         # ── Claude CLI (sonnet / opus) ────────────────

@@ -37,7 +37,7 @@ $pdo = new PDO(
      PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
 );
 
-$VALID_MODELS = ['sonnet','opus','xiaomi','mimo-pro','qwen'];
+$VALID_MODELS = ['qwen38','qwen-turbo','nemotron','gpt-oss','qwen3-next'];
 
 // ── POST → submit job ─────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -48,7 +48,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
     $prompt         = trim($body['prompt']);
-    $model          = in_array($body['model'] ?? '', $VALID_MODELS) ? $body['model'] : 'xiaomi';
+    $model          = in_array($body['model'] ?? '', $VALID_MODELS) ? $body['model'] : 'qwen38';  // DEFAULT: qwen3.8-max-preview (solange Preview-Rabatt laeuft)
     $targetdate     = preg_match('/^\d{4}-\d{2}-\d{2}$/', $body['targetdate'] ?? '')
                       ? $body['targetdate'] : date('Y-m-d');
     $resume_session = !empty($body['resume_session']) ? 1 : 0;

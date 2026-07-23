@@ -61,19 +61,48 @@ wait
 
 ---
 
-## Verfügbare Modelle
+## Entscheidungsmatrix: Welches Modell wann?
 
-| model | Einsatz | Kosten |
+### Stufe 1 — Kostenlos (immer bevorzugen)
+
+| Aufgabe | Empfohlenes Modell | Model-ID |
 |---|---|---|
-| `xiaomi` | Standard-Sub-Agent: Analyse, Lookup, Zusammenfassung | ~$0.0005/Job |
-| `mimo-pro` | Komplexe Reasoning-Aufgaben, lange Dokumente | ~$0.01/Job |
-| `haiku` | Claude-Qualität nötig, kein Tool-Zugriff erforderlich | Abo-Limit |
-| `sonnet` | Hohe Qualität + Tool-Zugriff via Claude CLI | Abo-Limit |
+| Standardaufgabe, Analyse, Erklärung | **xiaomi** | *(alias für Xiaomi MiMo V2 Flash)* |
+| Code-Generierung / Debugging | **qwen-free** | *(alias für Qwen3 Coder 480B free)* |
+| Komplexes Reasoning, lange Dokumente | `nvidia/nemotron-3-super-120b-a12b:free` | 120B, bestes freies Modell |
+| Allgemein-Reasoning mittelkomplex | `nousresearch/hermes-3-llama-3.1-405b:free` | 405B, sehr ausgewogen |
+| Research / Faktensuche | `openai/gpt-oss-120b:free` | OpenAI-basiert, 120B |
+| Mehrstufiges Denken (Chain-of-Thought) | `qwen/qwen3-next-80b-a3b-instruct:free` | hat internen Thinking-Modus |
+| Code + Reasoning kombiniert | `meta-llama/llama-3.3-70b-instruct:free` | Meta Llama 3.3 70B |
+| Bild-/Multimodal-Aufgabe | `nvidia/nemotron-nano-12b-v2-vl:free` | Vision+Language, 12B |
+| Schnelle kurze Aufgabe (Latenz wichtig) | `openai/gpt-oss-20b:free` | 20B, schneller als 120B |
+| Deutsch-Aufgabe, großes Modell nötig | `inclusionai/ling-2.6-1t:free` | 1T-Parameter MoE |
+| OCR / Dokumententext extrahieren | `baidu/qianfan-ocr-fast:free` | spezialisiert auf OCR |
+| Unbekannte Aufgabe / Auto-Routing | `openrouter/free` | OpenRouter wählt selbst |
 
-**Faustregel:**
-- Textaufgabe ohne Systemzugriff → `xiaomi`
-- Reasoning/Analyse komplex → `mimo-pro`
-- Tool-Zugriff / Datei-Operationen nötig → selbst erledigen (Claude CLI)
+### Stufe 2 — Kostenpflichtig (nur wenn Free-Qualität nicht reicht)
+
+| Aufgabe | Modell | Kosten |
+|---|---|---|
+| Komplexes Reasoning, Produktion | **mimo-pro** | ~/bin/bash.01/Job |
+| Großer Code-Kontext (>32k Token) | **qwen** | ~/bin/bash.005/Job |
+
+### Stufe 3 — Claude Abo (nur für Tool-Zugriff oder Claude-Qualität nötig)
+
+| Aufgabe | Modell | Abo-Gewicht |
+|---|---|---|
+| Einfache Claude-Antwort, kein Tool | **haiku** | 1× |
+| Mittlere Komplexität + Tools | **sonnet** | 4× |
+| Sehr komplex, kritisch, Datei-Ops | **opus** | 19× |
+
+### Kurzregeln
+
+1. **Kein Bash/Datei-Zugriff nötig → immer delegieren, nie selbst**
+2. **Delegieren: erst Free → dann mimo-pro → dann Claude**
+3. **Code → qwen-free; Reasoning → nemotron-3-super-120b; Allgemein → xiaomi**
+4. **Multimodal (Bild) → nemotron-nano-12b-vl** *(einziges freies Vision-Modell)*
+5. **OCR → qianfan-ocr-fast**
+6. **Mehrere unabhängige Teilaufgaben → parallel als separate Jobs einreichen**
 
 ---
 
@@ -93,6 +122,7 @@ MQTT-Broker = `192.168.178.218:1883`) ohne dass du die IPs im Prompt angeben mus
 - Aufgaben die Bash/Datei-Zugriff benötigen → selbst erledigen
 - Interaktive Loops (der Sub-Agent antwortet einmalig, kein Dialog)
 - Aufgaben < 5 Sekunden Denkzeit — Overhead lohnt sich nicht
+- Aufgaben die Claude CLI benötigen (z. B. Code committen, SSH-Befehle)
 
 ---
 
@@ -114,6 +144,7 @@ Statt curl: einfach `delegate` aufrufen — Key ist eingebaut.
 delegate "Aufgabe …"                   # Job einreichen
 delegate --wait "Aufgabe …"            # einreichen + auf Ergebnis warten
 delegate --model mimo-pro "Aufgabe …"  # anderes Modell
+delegate --model nvidia/nemotron-3-super-120b-a12b:free "Aufgabe …"
 delegate --list                         # letzte Jobs anzeigen
 delegate --status 42                    # Job-Status + Ergebnis
 ```
