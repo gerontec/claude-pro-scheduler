@@ -150,27 +150,42 @@ class BidOffers(unittest.TestCase):
         p.start()
         self.addCleanup(p.stop)
 
-    def test_without_a_reference_the_bid_is_exactly_min_bid(self):
-        # No surcharge: a quarter above the minimum is a quarter paid for
-        # nothing, every hour, for the whole rental.
+    def test_the_bid_is_a_tenth_above_the_minimum(self):
         o = offer(dph=0.30, interruptible=True)
         o["dph_base"] = 0.28
         o["min_bid"] = 0.20
-        self.assertAlmostEqual(vo.price(o), 0.22, places=6)
+        # 0.20 * 1.10 = 0.22, plus 0.30 - 0.28 = 0.02 for disk and bandwidth
+        self.assertAlmostEqual(vo.price(o), 0.24, places=6)
 
-    def test_a_bid_never_exceeds_the_guaranteed_price(self):
-        # Otherwise the machine that cannot be outbid would be the cheaper one.
-        o = offer(dph=0.50, interruptible=True)
-        o["dph_base"] = 0.50
-        o["min_bid"] = 0.45
-        self.assertAlmostEqual(vo.price(o, ondemand_ref=0.30), 0.30, places=6)
+    def test_a_cheap_offer_is_not_bid_up_to_half_the_guaranteed_price(self):
+        # This is the case that cost real money: min_bid 0.028 was bid at
+        # 0.108 because half of the guaranteed price was taken as the target.
+        o = offer(dph=0.03, interruptible=True)
+        o["dph_base"] = 0.028
+        o["min_bid"] = 0.028
+        self.assertAlmostEqual(vo.price(o, ondemand_ref=0.216), 0.0328,
+                               places=4)
 
-    def test_the_bid_is_half_the_guaranteed_price(self):
+    def test_an_expensive_minimum_stays_expensive_and_loses(self):
+        # min_bid above the guaranteed price cannot be undercut - the price
+        # says so honestly, and the guaranteed machine then simply wins the
+        # comparison.
+        teuer = offer(id_=1, dph=0.50, interruptible=True)
+        teuer["dph_base"] = 0.50
+        teuer["min_bid"] = 0.45
+        self.assertAlmostEqual(vo.price(teuer, ondemand_ref=0.30), 0.45,
+                               places=6)
+        sicher = offer(id_=2, dph=0.30)
+        v = vo.evaluate(instance(dph=1.00), [teuer, sicher], 24, cap=2.0)
+        self.assertEqual(v.best["id"], 2)
+
+    def test_half_the_guaranteed_price_is_the_ceiling(self):
+        # min_bid * 1.10 would be 0.33 here - more than half of what a
+        # machine costs that cannot be outbid at all, so the ceiling wins.
         o = offer(dph=0.30, interruptible=True)
         o["dph_base"] = 0.30
-        o["min_bid"] = 0.05
-        # guaranteed machines of this class cost 0.40 -> we bid 0.20
-        self.assertAlmostEqual(vo.price(o, ondemand_ref=0.40), 0.20, places=6)
+        o["min_bid"] = 0.30
+        self.assertAlmostEqual(vo.price(o, ondemand_ref=0.40), 0.30, places=6)
 
     def test_the_bid_never_falls_below_min_bid(self):
         # vast.ai rejects a bid under min_bid outright, so the floor wins
@@ -193,14 +208,14 @@ class BidOffers(unittest.TestCase):
             found = vo.offers(48, cap=2.0)
         self.assertAlmostEqual(vo._ondemand_ref, 0.44, places=6)
         bid = next(o for o in found if o["interruptible"])
-        # half of 0.44 plus what disk and bandwidth cost anyway
-        self.assertAlmostEqual(vo.price(bid), 0.22, places=6)
+        # min_bid 0.01 plus a tenth - far below the 0.22 ceiling
+        self.assertAlmostEqual(vo.price(bid), 0.011, places=4)
 
     def test_interruptible_twenty_percent_cheaper_switches(self):
         old = instance(dph=1.00)
         o = offer(id_=99, dph=0.82, interruptible=True)
         o["dph_base"] = 0.82
-        o["min_bid"] = 0.80                   # bid works out to exactly 0.80
+        o["min_bid"] = 0.80 / 1.10            # bid works out to exactly 0.80
         v = vo.evaluate(old, [o], 24, cap=2.0)
         self.assertTrue(v.switch)
         self.assertAlmostEqual(v.saving, 0.20, places=6)
@@ -210,7 +225,7 @@ class BidOffers(unittest.TestCase):
         old = instance(dph=1.00)
         o = offer(dph=0.89, interruptible=True)
         o["dph_base"] = 0.89
-        o["min_bid"] = 0.89
+        o["min_bid"] = 0.89 / 1.10
         v = vo.evaluate(old, [o], 24, cap=2.0)
         self.assertFalse(v.switch)
 
@@ -232,7 +247,7 @@ class BidOffers(unittest.TestCase):
         # mistake only shows when real money is about to be spent.
         self.assertIn("--bid_price", args)
         bid = float(args[args.index("--bid_price") + 1])
-        self.assertAlmostEqual(bid, 0.20, places=4)
+        self.assertAlmostEqual(bid, 0.22, places=4)
         self.assertIn("--image", args)
         self.assertIn("-hf", args)
         # Everything after --args belongs to the container. A vastai flag

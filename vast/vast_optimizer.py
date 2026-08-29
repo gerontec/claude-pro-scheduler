@@ -83,8 +83,8 @@ THRESHOLD = 0.11         # more than 11 % cheaper, otherwise no switch
 # min_bid - paying a quarter above the minimum is paying for nothing, and if
 # the bid loses, the attempt list walks on and ends at a guaranteed machine
 # anyway. That is the cheaper way to lose a bid than to overpay every hour.
-BID_OF_ONDEMAND = 0.5
-BID_MARKUP = 1.0         # no surcharge on min_bid when no reference is known
+BID_OF_ONDEMAND = 0.5    # ceiling: never more than half the guaranteed price
+BID_BUFFER = 1.10        # target: a tenth above the minimum, no more
 _ondemand_ref = 0.0      # cheapest guaranteed $/h for the current target
 TARGET_VRAM = 24         # GB in total, change with --vram
 PRICE_CAP = 0.60         # $/h, change with --cap
@@ -265,11 +265,15 @@ def price(offer: dict, ondemand_ref: float | None = None) -> float:
     around = max(0.0, total - base)
     floor = float(offer.get("min_bid") or base)
     ref = _ondemand_ref if ondemand_ref is None else ondemand_ref
-    bid = max(floor, ref * BID_OF_ONDEMAND) if ref else floor * BID_MARKUP
-    # A bid above the guaranteed price would be absurd: then the machine that
-    # cannot be outbid at all is the cheaper one.
-    if ref and bid > ref:
-        bid = ref
+    # Target is a tenth above the minimum - enough to survive small moves in
+    # the market, not the quarter that was paid for nothing before. Half the
+    # guaranteed price is the ceiling, never the goal: an offer with min_bid
+    # 0.028 was bid at 0.108 under the old rule, four times what it costs.
+    # And below min_bid nothing is possible at all, vast.ai rejects it.
+    ziel = floor * BID_BUFFER
+    if ref:
+        ziel = min(ziel, ref * BID_OF_ONDEMAND)
+    bid = max(floor, ziel)
     return bid + around
 
 
