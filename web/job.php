@@ -35,7 +35,8 @@ function dur($a,$b){
     $s=strtotime($b)-strtotime($a);
     return $s<60?"{$s}s":floor($s/60)."m".($s%60)."s";
 }
-$colors=['sonnet'=>'primary','opus'=>'warning','xiaomi'=>'success','mimo-pro'=>'danger','qwen'=>'info'];
+$colors=['sonnet'=>'primary','opus'=>'warning','xiaomi'=>'success','mimo-pro'=>'danger','qwen'=>'info',
+         'qwen-flash'=>'info','qwen-turbo'=>'info','qwen38'=>'info','deepseek-v4-flash'=>'success','LOCALP4'=>'success'];
 $statusColors=['queued'=>'warning','running'=>'info','done'=>'success','failed'=>'danger'];
 $autoRefresh = in_array($j['status'], ['queued','running']);
 ?><!DOCTYPE html>

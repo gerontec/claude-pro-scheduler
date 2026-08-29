@@ -5,10 +5,31 @@ $pdo = new PDO('mysql:host=localhost;dbname=wagodb;charset=utf8mb4', 'gh', 'a123
 
 $msg = '';
 
+// ── Aktive LLM-Modelle aus DB (llm_models) ──
+$LLM_MODELS = [];
+$LLM_DEFAULT = 'qwen38';
+foreach ($pdo->query("SELECT * FROM llm_models WHERE active=1 ORDER BY sort_order") as $r) {
+    $LLM_MODELS[$r['model_key']] = $r;
+    if ($r['is_default']) { $LLM_DEFAULT = $r['model_key']; }
+}
+function model_options($models, $default, $selected = null) {
+    // Flache Liste, nach Preis aufsteigend (sort_order), billigste/free zuerst.
+    $pick = $selected ?? $default;
+    $html = '';
+    foreach ($models as $key => $m) {
+        $sel = ($pick === $key) ? ' selected' : '';
+        $cost = $m['cost_estimate'] ? ' · ' . htmlspecialchars($m['cost_estimate']) : '';
+        $html .= '<option value="' . htmlspecialchars($key) . '"' . $sel . '>'
+               . htmlspecialchars($m['display_name']) . $cost . '</option>';
+    }
+    return $html;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (isset($_POST['submit_job'])) {
         $targetdate     = $_POST['targetdate'] ?: date('Y-m-d');
-        $model          = in_array($_POST['model'], ['sonnet','opus','xiaomi','mimo-pro','qwen']) ? $_POST['model'] : 'xiaomi';
+        $m = $_POST['model'] ?? $LLM_DEFAULT;
+        $model = in_array($m, array_keys($LLM_MODELS)) ? $m : $LLM_DEFAULT;
         $prompt         = trim($_POST['prompt']);
         $resume_session = isset($_POST['resume_session']) ? 1 : 0;
         if ($prompt) {
@@ -28,8 +49,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
     if (isset($_POST['kill_job'])) {
-        $id = (int)$_POST['kill_job'];
-        $pdo->exec("UPDATE claude_pro_batch SET status='failed', error_msg='Killed' WHERE id=$id AND status='running'");
+        $id  = (int)$_POST['kill_job'];
+        $row = $pdo->query("SELECT pid FROM claude_pro_batch WHERE id=$id AND status='running'")->fetch();
+        $pdo->exec("UPDATE claude_pro_batch SET status='failed', error_msg='Killed by user', finished_at=NOW() WHERE id=$id AND status='running'");
+        if ($row && $row['pid']) {
+            @posix_kill((int)$row['pid'], SIGTERM);
+        }
         header("Location: ?msg=cancelled&job=$id");
         exit;
     }
@@ -43,7 +68,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $id = (int)$_POST['reschedule_job'];
         $pdo->exec("UPDATE claude_pro_batch SET status='queued', result=NULL, error_msg=NULL,
                     input_tokens=NULL, output_tokens=NULL, cache_tokens=NULL, cost_usd=NULL,
-                    started_at=NULL, finished_at=NULL WHERE id=$id AND status IN ('done','failed')");
+                    started_at=NULL, finished_at=NULL, progress=0
+                    WHERE id=$id AND status IN ('done','failed')");
+        header("Location: ?msg=rescheduled&job=$id");
+        exit;
+    }
+    if (isset($_POST['edit_job'])) {
+        $id     = (int)$_POST['edit_job'];
+        $em = $_POST['edit_model'] ?? $LLM_DEFAULT;
+        $model = in_array($em, array_keys($LLM_MODELS)) ? $em : $LLM_DEFAULT;
+        $prompt = trim($_POST['edit_prompt']);
+        $date   = $_POST['edit_date'] ?? date('Y-m-d');
+        if ($prompt) {
+            $stmt = $pdo->prepare("UPDATE claude_pro_batch SET model=?, prompt=?, targetdate=?,
+                result=NULL, error_msg=NULL, input_tokens=NULL, output_tokens=NULL,
+                cache_tokens=NULL, cost_usd=NULL, started_at=NULL, finished_at=NULL,
+                progress=0, status='queued'
+                WHERE id=? AND status IN ('queued','done','failed')");
+            $stmt->execute([$model, $prompt, $date, $id]);
+        }
         header("Location: ?msg=rescheduled&job=$id");
         exit;
     }
@@ -55,7 +98,7 @@ if (isset($_GET['msg'])) {
     match($_GET['msg']) {
         'ok'          => $msg = ['success',   "Job #".htmlspecialchars($_GET['job'] ?? '')." queued &mdash; ".htmlspecialchars($_GET['date'] ?? '')." &mdash; ".htmlspecialchars($_GET['model'] ?? '')],
         'err'         => $msg = ['danger',    'No prompt text entered.'],
-        'cancelled'   => $msg = ['warning',   "Job #".htmlspecialchars($_GET['job'] ?? '')." cancelled."],
+        'cancelled'   => null,
         'deleted'     => $msg = ['secondary', "Job #".htmlspecialchars($_GET['job'] ?? '')." deleted."],
         'rescheduled' => $msg = ['info',      "Job #".htmlspecialchars($_GET['job'] ?? '')." rescheduled."],
         default       => null,
@@ -63,12 +106,14 @@ if (isset($_GET['msg'])) {
 }
 
 // ── Data ───────────────────────────────────────────────────
+$allowed_limits = [12, 25, 50, 100, 250];
+$job_limit = in_array((int)($_GET['limit'] ?? 12), $allowed_limits) ? (int)($_GET['limit'] ?? 12) : 12;
 $jobs = $pdo->query("
     SELECT id, created_at, targetdate, model, status,
            LEFT(prompt,100) AS prompt_short, prompt AS prompt_full,
            input_tokens, output_tokens, cache_tokens, cost_usd,
-           started_at, finished_at, result, error_msg
-    FROM claude_pro_batch ORDER BY created_at DESC LIMIT 50
+           started_at, finished_at, result, error_msg, progress
+    FROM claude_pro_batch ORDER BY created_at DESC LIMIT $job_limit
 ")->fetchAll(PDO::FETCH_ASSOC);
 
 $weekCost = $pdo->query("
@@ -164,11 +209,21 @@ if ($compact && $compact['ts']) {
 
 // ── Helper functions ───────────────────────────────────────
 function modelBadge($m) {
-    $map = ['sonnet'=>'primary','opus'=>'warning','xiaomi'=>'success','mimo-pro'=>'danger','qwen'=>'info'];
-    $labels = ['mimo-pro' => 'MiMo-Pro', 'qwen' => 'Qwen'];
-    $cls = $map[$m] ?? 'secondary';
-    $lbl = $labels[$m] ?? $m;
-    return "<span class=\"badge bg-$cls\">$lbl</span>";
+    if ($m === 'LOCALP4') return '<span class="badge bg-primary">⚡ Tesla P4</span>';
+    $map = ['sonnet'=>'primary','opus'=>'warning','haiku'=>'info','xiaomi'=>'success','mimo-pro'=>'danger','qwen-free'=>'success','qwen'=>'info'];
+    $labels = ['mimo-pro'=>'MiMo-Pro','qwen-free'=>'Qwen Free'];
+    if (isset($map[$m])) {
+        $cls = $map[$m];
+        $lbl = $labels[$m] ?? $m;
+    } elseif (str_contains($m, '/')) {
+        $cls = 'success';
+        // Kurzname: letztes Segment vor ":free"
+        $lbl = preg_replace('/:free$/', '', basename($m));
+        if (strlen($lbl) > 18) $lbl = substr($lbl, 0, 16) . '…';
+    } else {
+        $cls = 'secondary'; $lbl = $m;
+    }
+    return "<span class=\"badge bg-$cls\" title=\"$m\">$lbl</span>";
 }
 function statusBadge($s) {
     $map = ['queued'=>'warning','running'=>'info','done'=>'success','failed'=>'danger'];
@@ -210,6 +265,12 @@ body { background:#0d1117; }
 .spinner { animation: spin .8s linear infinite; display:inline-block; }
 @keyframes spin { to { transform:rotate(360deg); } }
 .prompt-truncate { max-width:220px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; display:block; }
+.progress-bits { display:flex; gap:3px; align-items:center; margin-top:3px; }
+.bit-dot      { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+.bit-on       { background:#0dcaf0; box-shadow:0 0 4px rgba(13,202,240,.6); }
+.bit-on-done  { background:#198754; box-shadow:0 0 3px rgba(25,135,84,.5); }
+.bit-on-fail  { background:#6c757d; }
+.bit-off      { background:#21262d; border:1px solid #30363d; }
 @media(max-width:576px) {
     .stat-val { font-size:1.3rem; }
     .hide-mobile { display:none !important; }
@@ -220,8 +281,11 @@ body { background:#0d1117; }
 
 <nav class="navbar navbar-dark" style="background:#161b22;border-bottom:1px solid #30363d">
     <div class="container-fluid">
-        <span class="navbar-brand">
-            <i class="bi bi-robot me-2 text-primary"></i>Claude Pro Batch
+        <span class="navbar-brand d-flex align-items-center gap-3">
+            <span><i class="bi bi-robot me-2 text-primary"></i>Claude Pro Batch</span>
+            <a href="model.html" class="text-muted" style="font-size:.75rem;font-weight:400;text-decoration:none;" title="Objektmodell & Flowchart">
+                <i class="bi bi-diagram-3 me-1"></i>Objektmodell
+            </a>
         </span>
         <div class="d-flex align-items-center gap-2">
             <small class="text-muted d-none d-sm-block">Reset: <?= htmlspecialchars($weekReset) ?></small>
@@ -255,11 +319,7 @@ body { background:#0d1117; }
                 <div class="col-12 col-sm-7 col-md-3">
                     <label class="form-label small text-muted text-uppercase">Model</label>
                     <select class="form-select" name="model">
-                        <option value="qwen" selected>🟢 Qwen — Free, unlimited</option>
-                        <option value="xiaomi">🟢 Xiaomi MiMo — Free (OpenRouter)</option>
-                        <option value="mimo-pro">🔴 Xiaomi MiMo V2 Pro (OpenRouter)</option>
-                        <option value="sonnet">🔵 Sonnet — Abo-Limit (~4×)</option>
-                        <option value="opus">🟣 Opus — Abo-Limit (~19×)</option>
+                        <?= model_options($LLM_MODELS, $LLM_DEFAULT) ?>
                     </select>
                 </div>
                 <div class="col-12 col-sm-auto d-flex align-items-end pb-1">
@@ -303,10 +363,18 @@ body { background:#0d1117; }
 <!-- ── Job List ── -->
 <div class="card mb-3">
     <div class="card-header d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-list-task me-1"></i>Jobs (last 50)</span>
-        <?php if ($hasActive): ?>
-        <span class="text-info small"><i class="bi bi-arrow-repeat spinner me-1"></i>Auto-refresh 30s</span>
-        <?php endif; ?>
+        <span><i class="bi bi-list-task me-1"></i>Jobs (last <?= $job_limit ?>)</span>
+        <div class="d-flex align-items-center gap-3">
+            <?php if ($hasActive): ?>
+            <span class="text-info small"><i class="bi bi-arrow-repeat spinner me-1"></i>Auto-refresh 30s</span>
+            <?php endif; ?>
+            <select class="form-select form-select-sm" style="width:auto"
+                onchange="window.location.href='?limit='+this.value">
+                <?php foreach ([12,25,50,100,250] as $l): ?>
+                <option value="<?= $l ?>" <?= $l===$job_limit?'selected':'' ?>><?= $l ?> Jobs</option>
+                <?php endforeach; ?>
+            </select>
+        </div>
     </div>
     <div class="card-body p-0">
         <div class="table-responsive">
@@ -328,7 +396,24 @@ body { background:#0d1117; }
                 <td><a href="job.php?id=<?= $j['id'] ?>" class="text-muted">#<?= $j['id'] ?></a></td>
                 <td class="text-muted small"><?= $j['targetdate'] ?></td>
                 <td><?= modelBadge($j['model']) ?></td>
-                <td><?= statusBadge($j['status']) ?></td>
+                <td>
+                    <?= statusBadge($j['status']) ?>
+                    <?php
+                    $prog   = (int)($j['progress'] ?? 0);
+                    $labels = ['Analyse','Recherche','Hauptarbeit','Daten','Auswertung','Bericht','DB-Write','Verifikation'];
+                    $st     = $j['status'];
+                    $bitOn  = match($st) {
+                        'running' => 'bit-on',
+                        'done'    => 'bit-on-done',
+                        default   => 'bit-on-fail',
+                    };
+                    // Progess-Wert zeigen wenn > 0 oder job aktiv/fertig
+                    if ($prog > 0 || in_array($st, ['running','done','failed'])):
+                    $progColor = match($st) { 'done' => '#198754', 'running' => '#0dcaf0', default => '#6c757d' };
+                    ?>
+                    <div title="Progress: <?= $prog ?>/255 (<?= decbin($prog) ?>)" style="font-size:.75rem;color:<?= $progColor ?>;margin-top:2px;font-family:monospace"><?= $prog ?>/255</div>
+                    <?php endif; ?>
+                </td>
                 <td>
                     <a href="job.php?id=<?= $j['id'] ?>" class="text-decoration-none">
                     <span class="prompt-truncate text-muted small"
@@ -355,7 +440,8 @@ body { background:#0d1117; }
                             data-bs-target="#res-<?= $j['id'] ?>">
                         <i class="bi bi-eye"></i>
                     </button>
-                    <?php elseif ($j['status'] === 'queued'): ?>
+                    <?php endif; ?>
+                    <?php if ($j['status'] === 'queued'): ?>
                     <form method="POST" class="d-inline">
                         <button class="btn btn-sm btn-outline-danger py-0" name="cancel_job" value="<?= $j['id'] ?>">
                             <i class="bi bi-x"></i>
@@ -375,6 +461,12 @@ body { background:#0d1117; }
                             <i class="bi bi-arrow-clockwise"></i>
                         </button>
                     </form>
+                    <?php endif; ?>
+                    <?php if (in_array($j['status'], ['queued','done','failed'])): ?>
+                    <button class="btn btn-sm btn-outline-info py-0 ms-1"
+                            onclick="openEdit(<?= $j['id'] ?>,<?= htmlspecialchars(json_encode($j['model'])) ?>,<?= htmlspecialchars(json_encode($j['targetdate'])) ?>,<?= htmlspecialchars(json_encode($j['prompt_full'])) ?>)">
+                        <i class="bi bi-pencil"></i>
+                    </button>
                     <?php endif; ?>
                     <?php if ($j['status'] !== 'running'): ?>
                     <form method="POST" class="d-inline"
@@ -568,7 +660,7 @@ body { background:#0d1117; }
                 <div class="text-muted small text-uppercase mb-2" style="letter-spacing:.5px">Usage by model</div>
                 <?php
                 $maxC = max(array_column($modelStats, 'cost') ?: [0.0001]);
-                $cols = ['qwen'=>'#3fb950','sonnet'=>'#58a6ff','opus'=>'#bc8cff','xiaomi'=>'#f0883e','mimo-pro'=>'#f85149'];
+                $cols = ['qwen-free'=>'#3fb950','sonnet'=>'#58a6ff','opus'=>'#bc8cff','xiaomi'=>'#f0883e','mimo-pro'=>'#f85149'];
                 foreach ($modelStats as $m):
                     $pct = $maxC > 0 ? round($m['cost']/$maxC*100) : 1;
                 ?>
@@ -620,7 +712,7 @@ body { background:#0d1117; }
             </tr></thead>
             <tbody>
                 <tr>
-                    <td><?= modelBadge('qwen') ?></td>
+                    <td><?= modelBadge('qwen-free') ?></td>
                     <td>$0</td><td>$0</td><td>$0</td>
                     <td><strong class="text-success">Free — unlimited</strong></td>
                     <td class="hide-mobile text-muted small">All text tasks, analysis, scripts (local CLI)</td>
@@ -737,6 +829,57 @@ function copyCache() {
             b.classList.replace('btn-success', 'btn-outline-primary');
         }, 2000);
     });
+}
+</script>
+
+<!-- Edit Modal -->
+<div class="modal fade" id="editModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content bg-dark text-light border-secondary">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title"><i class="bi bi-pencil me-2"></i>Job bearbeiten &amp; neu einreihen</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="POST">
+        <div class="modal-body">
+          <input type="hidden" name="edit_job" id="edit_job_id">
+          <div class="row g-2 mb-3">
+            <div class="col-sm-6">
+              <label class="form-label small text-muted text-uppercase">Model</label>
+              <select class="form-select bg-dark text-light border-secondary" name="edit_model" id="edit_model">
+                <?= model_options($LLM_MODELS, $LLM_DEFAULT) ?>
+                </select>
+            </div>
+            <div class="col-sm-6">
+              <label class="form-label small text-muted text-uppercase">Target Date</label>
+              <input type="date" class="form-control bg-dark text-light border-secondary"
+                     name="edit_date" id="edit_date">
+            </div>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small text-muted text-uppercase">Prompt</label>
+            <textarea class="form-control bg-dark text-light border-secondary font-monospace"
+                      name="edit_prompt" id="edit_prompt" rows="10"
+                      style="font-size:.8rem"></textarea>
+          </div>
+        </div>
+        <div class="modal-footer border-secondary">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Abbrechen</button>
+          <button type="submit" class="btn btn-warning">
+            <i class="bi bi-arrow-clockwise me-1"></i>Speichern &amp; Reschedule
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+<script>
+function openEdit(id, model, date, prompt) {
+    document.getElementById('edit_job_id').value = id;
+    document.getElementById('edit_model').value  = model;
+    document.getElementById('edit_date').value   = date;
+    document.getElementById('edit_prompt').value = prompt;
+    new bootstrap.Modal(document.getElementById('editModal')).show();
 }
 </script>
 </body>

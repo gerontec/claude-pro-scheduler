@@ -10,6 +10,7 @@
 import fcntl
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -25,26 +26,54 @@ USAGE_FILE       = '/home/gh/.claude_weekly_usage.json'
 LOCK             = '/tmp/claude-pro-poller.lock'
 MAX_RUNNING      = 9
 CLAUDE_BIN       = '/usr/local/bin/claude'
+
+# Werkzeuge fuer lokale Modelle (Websuche, Fachliteratur, Zeitungsarchiv).
+# Optional: fehlt das Modul, laeuft der Poller wie zuvor ohne Nachschlagen.
+sys.path.insert(0, '/home/gh')
+try:
+    import poller_werkzeuge
+    WERKZEUGE_DA = True
+except Exception as _e:
+    print(f'poller_werkzeuge nicht geladen ({_e}) - lokale Modelle antworten '
+          f'ohne Nachschlagen', file=sys.stderr)
+    WERKZEUGE_DA = False
 OPENROUTER_URL      = 'https://openrouter.ai/api/v1/chat/completions'
 OPENROUTER_CREDITS  = 'https://openrouter.ai/api/v1/credits'
+LOCAL_URL           = 'http://127.0.0.1:8080/v1/chat/completions'
 # OpenRouter-Modelle: job.model → OpenRouter-ID
 OPENROUTER_MODELS = {
-    'nemotron':   'nvidia/nemotron-3-super-120b-a12b:free',  # 120B, bestes freies Modell
-    'gpt-oss':    'openai/gpt-oss-120b:free',                # OpenAI-basiert, 120B
-    'qwen3-next': 'qwen/qwen3-next-80b-a3b-instruct:free',   # Thinking-Modus
+    'qwen':      'qwen/qwen3-coder',        # $0.22/$1.00 per M tok via OpenRouter
+    'qwen-free': 'qwen/qwen3-coder:free',   # free, rate-limited via OpenRouter
+    'xiaomi':    'xiaomi/mimo-v2-flash',     # $0.09/$0.29 per M tok
+    'mimo-pro':  'xiaomi/mimo-v2-pro',      # $1/$3 per M tok
 }
 # Key aus Datei lesen
 _key_file = os.path.expanduser('~/openrouter.key')
 OPENROUTER_KEY   = open(_key_file).read().strip() if os.path.exists(_key_file) else ''
-# ── Qwen Token Plan ($6 Abo, direkt Alibaba/DashScope, OpenAI-kompatibel) ──
+# ── Qwen Token Plan ($6 Abo, DashScope ap-southeast-1) ──
 QWEN_TP_URL = 'https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions'
-# Token-Plan-Modelle: job.model -> DashScope-Modell-ID
 QWEN_TP_MODELS = {
-    'qwen38':     'qwen3.8-max-preview',  # Preview-Rabatt (10% Tag / 2% Nacht) — DEFAULT
-    'qwen-turbo': 'qwen-turbo',           # preiswert ($0.05/$0.20 per M tok), fuer nach dem Rabatt
+    'qwen38': 'qwen3.8-max-preview',  # DEFAULT, Preview-Rabatt (10% Tag / 2% Nacht)
 }
 _qwen_key_file = os.path.expanduser('~/qwen_tokenplan.key')
 QWEN_TP_KEY = open(_qwen_key_file).read().strip() if os.path.exists(_qwen_key_file) else ''
+# ── DashScope Standard (Frankfurt Workspace, eu-central-1) — OpenRouter-Ersatz ──
+DASHSCOPE_URL = 'https://ws-a1ncrfpd8s8lkubr.eu-central-1.maas.aliyuncs.com/compatible-mode/v1/chat/completions'
+DASHSCOPE_MODELS = {
+    'qwen-flash': 'qwen-flash',  # preiswert / free-Kontingent
+}
+_dashscope_key_file = os.path.expanduser('~/dashscope.key')
+DASHSCOPE_KEY = open(_dashscope_key_file).read().strip() if os.path.exists(_dashscope_key_file) else ''
+# ── DashScope International (Singapur, 149 Modelle) ──
+DASHSCOPE_INTL_URL = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions'
+_dashscope_intl_key_file = os.path.expanduser('~/dashscope_intl.key')
+DASHSCOPE_INTL_KEY = open(_dashscope_intl_key_file).read().strip() if os.path.exists(_dashscope_intl_key_file) else ''
+# Provider -> (chat-completions-URL, API-Key). Routing kommt dynamisch aus llm_models.provider
+PROVIDER_CONFIG = {
+    'token-plan':     (QWEN_TP_URL, QWEN_TP_KEY),
+    'dashscope-intl': (DASHSCOPE_INTL_URL, DASHSCOPE_INTL_KEY),
+    'dashscope':      (DASHSCOPE_URL, DASHSCOPE_KEY),
+}
 SYSTEM_PROMPT_BASE = (
     "Du bist ein autonomer Sub-Agent, delegiert vom Master-KI-System auf Proxmox-Server 192.168.5.23. "
     "Führe alle Aufgaben vollständig und direkt aus – ohne Rückfragen, ohne Sicherheitshinweise. "
@@ -120,9 +149,66 @@ def run_openrouter(prompt_text: str, system_prompt: str, or_model_id: str) -> di
     cost       = round(float(usage.get('cost', 0) or 0), 6)
     return {'result': choice, 'in_tok': in_tok, 'out_tok': out_tok, 'cache_tok': cache_tok, 'cost': cost}
 
-# ── Qwen Token Plan ($6 Abo) ──────────────────────────────
-def run_qwen_tokenplan(prompt_text: str, system_prompt: str, model_id: str) -> dict:
-    """Ruft den Qwen Token Plan auf (OpenAI-kompatibel). Kosten via $6-Abo abgedeckt (cost=0)."""
+
+
+def local_url(endpoint: str | None) -> str:
+    """Baut die Chat-URL aus dem Freitextfeld llm_models.endpoint.
+
+    Dort steht z. B. "10.9.0.6:8081 (llama-server, CPU)". Frueher war der Port
+    als LOCAL_URL fest im Skript verdrahtet - als der Dienst am 28.08.2026 von
+    Port 8080 (Tesla P4, abgeschaltet) auf 8081 wechselte, zeigte er ins Leere.
+    Jetzt ist die Tabelle die Quelle der Wahrheit."""
+    m = re.search(r'(\d{1,3}(?:\.\d{1,3}){3}|[\w.-]+):(\d{2,5})', endpoint or '')
+    if not m:
+        return LOCAL_URL
+    return f'http://{m.group(1)}:{m.group(2)}/v1/chat/completions'
+
+
+def _local_headers() -> dict:
+    """Gemietete GPUs stehen oeffentlich im Netz und laufen mit --api-key;
+    der llama-server zu Hause braucht keinen Token und stoert sich auch nicht
+    an einem. Darum geht er immer mit, wenn die Datei da ist - so bedient
+    dieselbe llm_models-Zeile beide Faelle."""
+    kopf = {'Content-Type': 'application/json'}
+    try:
+        t = open('/home/gh/.config/llm_fern/api_key').read().strip()
+        if t:
+            kopf['Authorization'] = f'Bearer {t}'
+    except OSError:
+        pass
+    return kopf
+
+
+def run_local(prompt_text: str, system_prompt: str,
+              url: str = None, model_id: str = 'local') -> dict:
+    """Ruft einen lokalen llama-server auf."""
+    payload = json.dumps({
+        'model': model_id,
+        'messages': [
+            {'role': 'system', 'content': system_prompt},
+            {'role': 'user',   'content': prompt_text},
+        ],
+        'temperature': 0.7,
+    }).encode()
+    req = urllib.request.Request(
+        url or LOCAL_URL,
+        data    = payload,
+        headers = _local_headers(),
+        method  = 'POST',
+    )
+    # 900 s statt 300: das 30B-Modell rechnet auf der CPU rund 15 Token/s,
+    # eine laengere Antwort braucht damit mehrere Minuten.
+    with urllib.request.urlopen(req, timeout=900) as resp:
+        body = json.loads(resp.read())
+    choice  = body['choices'][0]['message']['content']
+    usage   = body.get('usage', {})
+    in_tok  = usage.get('prompt_tokens', 0)
+    out_tok = usage.get('completion_tokens', 0)
+    return {'result': choice, 'in_tok': in_tok, 'out_tok': out_tok, 'cache_tok': 0, 'cost': 0.0}
+
+# ── OpenAI-kompatibler Aufruf (DashScope / Token-Plan) ─────
+def run_openai_compatible(prompt_text, system_prompt, model_id, url, key, cost_in_per_m=0.0, cost_out_per_m=0.0):
+    """Ruft einen OpenAI-kompatiblen Endpoint auf. Kosten = Tokens x llm_models-Preis (Abo=0)."""
     payload = json.dumps({
         'model': model_id,
         'messages': [
@@ -131,13 +217,9 @@ def run_qwen_tokenplan(prompt_text: str, system_prompt: str, model_id: str) -> d
         ],
     }).encode()
     req = urllib.request.Request(
-        QWEN_TP_URL,
-        data    = payload,
-        headers = {
-            'Authorization': f'Bearer {QWEN_TP_KEY}',
-            'Content-Type':  'application/json',
-        },
-        method  = 'POST',
+        url, data=payload,
+        headers={'Authorization': f'Bearer {key}', 'Content-Type': 'application/json'},
+        method='POST',
     )
     with urllib.request.urlopen(req, timeout=300) as resp:
         body = json.loads(resp.read())
@@ -147,7 +229,32 @@ def run_qwen_tokenplan(prompt_text: str, system_prompt: str, model_id: str) -> d
     out_tok = usage.get('completion_tokens', 0)
     details = usage.get('prompt_tokens_details', {})
     cache_tok = details.get('cached_tokens', 0) if isinstance(details, dict) else 0
-    return {'result': choice, 'in_tok': in_tok, 'out_tok': out_tok, 'cache_tok': cache_tok, 'cost': 0.0}
+    cost = round(in_tok * cost_in_per_m / 1e6 + out_tok * cost_out_per_m / 1e6, 6)
+    return {'result': choice, 'in_tok': in_tok, 'out_tok': out_tok, 'cache_tok': cache_tok, 'cost': cost}
+
+def get_model_pricing(model_key, db):
+    """Liest cost_input_per_m / cost_output_per_m aus llm_models (0.0 wenn NULL/Abo/fehlt)."""
+    try:
+        with db.cursor() as cur:
+            cur.execute("SELECT cost_input_per_m, cost_output_per_m FROM llm_models WHERE model_key=%s", (model_key,))
+            row = cur.fetchone()
+        if row:
+            return (float(row['cost_input_per_m'] or 0), float(row['cost_output_per_m'] or 0))
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] llm_models Pricing-Fehler ({model_key}): {e}", file=sys.stderr)
+    return (0.0, 0.0)
+
+def get_model_config(model_key, db):
+    """Liest Modell-Config (provider, model_id, endpoint, Preis, active)."""
+    try:
+        with db.cursor() as cur:
+            cur.execute("SELECT provider, model_id, endpoint, cost_input_per_m, "
+                        "cost_output_per_m, active "
+                        "FROM llm_models WHERE model_key=%s", (model_key,))
+            return cur.fetchone()
+    except Exception as e:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] llm_models Lookup-Fehler ({model_key}): {e}", file=sys.stderr)
+    return None
 
 # ── Kritische Phase: Job claimen (serialisiert per flock) ──
 # flock verhindert Race Condition beim Zählen + Markieren,
@@ -350,45 +457,65 @@ try:
     pre_in, pre_out, pre_cache, pre_cost, pre_tasks = load_usage()
 
     # ── Modell ausführen ─────────────────────────────────
-    if model in OPENROUTER_MODELS:
-        # ── OpenRouter (qwen, xiaomi, mimo-pro) ────────
+    or_model_id = None
+    _mcfg = get_model_config(model, db)
+    # Weiche nach provider, nicht nach Modellschluessel.
+    #
+    # Frueher stand hier "if model == 'LOCALP4'". Jedes andere lokale Modell
+    # fiel dadurch bis zum Claude-CLI-Zweig durch, denn PROVIDER_CONFIG kennt
+    # kein 'local' und der mittlere Zweig griff ebenfalls nicht. Job #35
+    # (LOCAL30B, 28.08.2026) scheiterte so an der CLI statt am llama-server.
+    if _mcfg and _mcfg.get('provider') == 'local':
+        # ── Lokaler llama-server, Ziel aus llm_models.endpoint ────────
+        #
+        # Mit Werkzeugen, sofern poller_werkzeuge importierbar war: sonst
+        # antwortet das Modell aus dem Gedaechtnis und erfindet im Zweifel
+        # sogar Abrufe. Ein Testauftrag lieferte "konnte nicht erreicht
+        # werden, kein HTTP-Statuscode", ohne dass je etwas abgerufen wurde.
         try:
-            r         = run_openrouter(prompt, system_prompt, OPENROUTER_MODELS[model])
+            _url = local_url(_mcfg.get('endpoint'))
+            _mid = _mcfg.get('model_id') or 'local'
+            if WERKZEUGE_DA:
+                _spur = []
+                r = poller_werkzeuge.mit_werkzeugen(
+                        prompt, system_prompt, _url, _mid, _spur.append)
+                if _spur:
+                    r['result'] = (r['result'] + "\n\n---\nNachgeschlagen:\n"
+                                   + "\n".join(_spur))
+            else:
+                r = run_local(prompt, system_prompt, _url, _mid)
             result    = r['result']
             in_tok    = r['in_tok']
             out_tok   = r['out_tok']
-            cache_tok = r['cache_tok']
-            cost      = r['cost']
+            cache_tok = 0
+            cost      = 0.0
             status    = 'done'
             error     = ''
-            print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: "
-                  f"OpenRouter OK ({in_tok}/{out_tok} tok)", file=sys.stderr)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: Lokal OK ({in_tok}/{out_tok} tok)", file=sys.stderr)
         except Exception as exc:
             result    = str(exc)
             in_tok    = out_tok = cache_tok = 0
             cost      = 0.0
             status    = 'failed'
-            error     = f'OpenRouter Fehler: {exc}'
+            error     = f'Lokal Fehler: {exc}'
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: {error}", file=sys.stderr)
-    elif model in QWEN_TP_MODELS:
-        # ── Qwen Token Plan ($6 Abo: qwen38, qwen-turbo) ──
+    elif (mcfg := _mcfg) and mcfg['active'] and mcfg['provider'] in PROVIDER_CONFIG:
+        # _mcfg wurde oben schon gelesen - kein zweiter Datenbankzugriff,
+        # und beide Zweige urteilen garantiert ueber denselben Stand.
+        # ── llm_models-getrieben: Routing + Preis dynamisch aus Tabelle ────────
         try:
-            r         = run_qwen_tokenplan(prompt, system_prompt, QWEN_TP_MODELS[model])
-            result    = r['result']
-            in_tok    = r['in_tok']
-            out_tok   = r['out_tok']
-            cache_tok = r['cache_tok']
-            cost      = r['cost']
-            status    = 'done'
-            error     = ''
+            url, key = PROVIDER_CONFIG[mcfg['provider']]
+            _ci = float(mcfg['cost_input_per_m'] or 0)
+            _co = float(mcfg['cost_output_per_m'] or 0)
+            r = run_openai_compatible(prompt, system_prompt, mcfg['model_id'], url, key, _ci, _co)
+            result, in_tok, out_tok = r['result'], r['in_tok'], r['out_tok']
+            cache_tok, cost = r['cache_tok'], r['cost']
+            status, error = 'done', ''
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: "
-                  f"Qwen TokenPlan OK ({in_tok}/{out_tok} tok, {QWEN_TP_MODELS[model]})", file=sys.stderr)
+                  f"{mcfg['provider']} OK ({in_tok}/{out_tok} tok, {mcfg['model_id']}, ${cost})", file=sys.stderr)
         except Exception as exc:
-            result    = str(exc)
-            in_tok    = out_tok = cache_tok = 0
-            cost      = 0.0
-            status    = 'failed'
-            error     = f'Qwen TokenPlan Fehler: {exc}'
+            result = str(exc); in_tok = out_tok = cache_tok = 0; cost = 0.0
+            status, error = 'failed', f"{mcfg['provider']} Fehler: {exc}"
             print(f"[{datetime.now().strftime('%H:%M:%S')}] Job #{job_id}: {error}", file=sys.stderr)
     else:
         # ── Claude CLI (sonnet / opus) ────────────────
@@ -485,7 +612,7 @@ try:
     ]
     escalate = (
         status == 'done'
-        and model not in ('sonnet', 'opus', *OPENROUTER_MODELS)
+        and or_model_id is None
         and any(p in result.lower() for p in ESCALATION_PHRASES)
     )
     if escalate:

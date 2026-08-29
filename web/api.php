@@ -37,7 +37,13 @@ $pdo = new PDO(
      PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC]
 );
 
-$VALID_MODELS = ['qwen38','qwen-turbo','nemotron','gpt-oss','qwen3-next'];
+// Aktive Modelle aus llm_models (Quelle der Wahrheit, monatlich gepflegt)
+$LLM_MODELS = [];
+$LLM_DEFAULT = 'qwen38';
+foreach ($pdo->query("SELECT model_key, is_default FROM llm_models WHERE active=1") as $r) {
+    $LLM_MODELS[$r['model_key']] = true;
+    if ($r['is_default']) { $LLM_DEFAULT = $r['model_key']; }
+}
 
 // ── POST → submit job ─────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -48,7 +54,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
     $prompt         = trim($body['prompt']);
-    $model          = in_array($body['model'] ?? '', $VALID_MODELS) ? $body['model'] : 'qwen38';  // DEFAULT: qwen3.8-max-preview (solange Preview-Rabatt laeuft)
+    $m = $body['model'] ?? $LLM_DEFAULT;
+    $model = isset($LLM_MODELS[$m]) ? $m : $LLM_DEFAULT;  // Default aus llm_models
     $targetdate     = preg_match('/^\d{4}-\d{2}-\d{2}$/', $body['targetdate'] ?? '')
                       ? $body['targetdate'] : date('Y-m-d');
     $resume_session = !empty($body['resume_session']) ? 1 : 0;
