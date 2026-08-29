@@ -77,14 +77,14 @@ MODEL = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M"
 PORT = 8080
 
 THRESHOLD = 0.11         # more than 11 % cheaper, otherwise no switch
-# What a bid is worth is decided by the guaranteed price, not by min_bid:
-# min_bid sits at the market threshold, and a bid a few cents above it is
-# outbid within minutes - six instances today were created and then never
-# started. So the bid is half of what the same class costs as a guaranteed
-# instance. That is a real buffer against other bidders and still half price;
-# if even that loses, the list walks on and takes a guaranteed machine.
+# What a bid is worth is decided by the guaranteed price, not by min_bid: the
+# bid is half of what the same class costs as a guaranteed instance, and never
+# less than min_bid, which vast.ai rejects outright. Nothing is added on top of
+# min_bid - paying a quarter above the minimum is paying for nothing, and if
+# the bid loses, the attempt list walks on and ends at a guaranteed machine
+# anyway. That is the cheaper way to lose a bid than to overpay every hour.
 BID_OF_ONDEMAND = 0.5
-BID_MARKUP = 1.25        # fallback when no guaranteed price is known
+BID_MARKUP = 1.0         # no surcharge on min_bid when no reference is known
 _ondemand_ref = 0.0      # cheapest guaranteed $/h for the current target
 TARGET_VRAM = 24         # GB in total, change with --vram
 PRICE_CAP = 0.60         # $/h, change with --cap
@@ -266,6 +266,10 @@ def price(offer: dict, ondemand_ref: float | None = None) -> float:
     floor = float(offer.get("min_bid") or base)
     ref = _ondemand_ref if ondemand_ref is None else ondemand_ref
     bid = max(floor, ref * BID_OF_ONDEMAND) if ref else floor * BID_MARKUP
+    # A bid above the guaranteed price would be absurd: then the machine that
+    # cannot be outbid at all is the cheaper one.
+    if ref and bid > ref:
+        bid = ref
     return bid + around
 
 
