@@ -140,6 +140,32 @@ class Threshold(unittest.TestCase):
         self.assertEqual(v.best["id"], 2)
 
 
+class TwoCategories(unittest.TestCase):
+    """Guaranteed and bid, side by side - one number alone decides nothing."""
+
+    def test_the_cheapest_of_each_kind(self):
+        sicher_teuer = offer(id_=1, dph=0.40)
+        sicher_billig = offer(id_=2, dph=0.30)
+        gebot = offer(id_=3, dph=0.20, interruptible=True)
+        gebot["min_bid"] = 0.10
+        gebot["dph_base"] = 0.18
+        liste = [sicher_teuer, sicher_billig, gebot]
+        self.assertEqual(vo.cheapest(liste, interruptible=False)["id"], 2)
+        self.assertEqual(vo.cheapest(liste, interruptible=True)["id"], 3)
+
+    def test_without_one_kind_the_answer_is_none(self):
+        self.assertIsNone(vo.cheapest([offer(id_=1)], interruptible=True))
+
+    def test_the_line_shows_what_a_bid_really_consists_of(self):
+        o = offer(id_=5, dph=0.20, interruptible=True)
+        o["min_bid"] = 0.10
+        o["dph_base"] = 0.18
+        zeile = vo.beschreibe(o)
+        self.assertIn("min_bid 0.100", zeile)
+        self.assertIn("disk and net 0.020", zeile)   # what is charged anyway
+        self.assertIn("guaranteed", vo.beschreibe(offer(id_=6)))
+
+
 class BidOffers(unittest.TestCase):
     """Interruptible is allowed - but priced at our own bid."""
 

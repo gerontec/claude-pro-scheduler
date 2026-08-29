@@ -1537,17 +1537,46 @@ def show_status(a) -> None:
               f"{st.get('price_dph')} $/h)")
 
 
+def cheapest(candidates: list, interruptible: bool) -> dict | None:
+    """The cheapest of one kind. Both kinds are wanted side by side: what a
+    machine costs that nobody can take away, and what the same class costs as
+    a bid. Only the two numbers together say whether bidding is worth the
+    risk at all."""
+    passend = [o for o in candidates
+               if bool(o.get("interruptible")) == interruptible]
+    return min(passend, key=price) if passend else None
+
+
+def beschreibe(o: dict) -> str:
+    """One offer in one line, with the numbers a decision needs."""
+    if not o:
+        return "none"
+    text = (f"{o['id']}: {price(o):.3f} $/h, {o.get('num_gpus')}x "
+            f"{o.get('gpu_name')} ({vram_gb(o):.0f} GB), "
+            f"{o.get('geolocation', '?')}")
+    if o.get("interruptible"):
+        text += (f", bid (min_bid {float(o.get('min_bid') or 0):.3f}, "
+                 f"disk and net {max(0.0, float(o.get('dph_total') or 0) - float(o.get('dph_base') or 0)):.3f})")
+    else:
+        text += ", guaranteed"
+    return text
+
+
 def run_once(a, for_real: bool) -> int:
     old = running_instance()
     candidates = offers(a.vram, a.cap, with_bids=not a.no_bid)
     report(f"{'run' if for_real else 'check'}: target {a.vram:.0f} GB, "
            f"cap {a.cap:.2f} $/h, {len(candidates)} suitable offers")
     v = evaluate(old, candidates, a.vram, a.cap, state_read())
+    sicher = cheapest(candidates, interruptible=False)
+    gebot = cheapest(candidates, interruptible=True)
+    report(f"  cheapest guaranteed:  {beschreibe(sicher)}")
+    report(f"  cheapest bid:         {beschreibe(gebot)}")
+    if sicher and gebot and price(sicher):
+        report(f"  bidding costs {price(gebot)/price(sicher)*100:.0f} % of the "
+               f"guaranteed price")
     if v.best:
-        report(f"  best offer {v.best['id']}: {price(v.best):.3f} $/h, "
-               f"{v.best.get('num_gpus')}x {v.best.get('gpu_name')} "
-               f"({vram_gb(v.best):.0f} GB), {v.best.get('geolocation', '?')}"
-               f"{', interruptible' if v.best.get('interruptible') else ''}")
+        report(f"  best offer {beschreibe(v.best)}")
     if v.old:
         report(f"  running: {v.old['id']} at "
                f"{float(v.old.get('dph_total') or 0):.3f} $/h")
