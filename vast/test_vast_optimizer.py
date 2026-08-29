@@ -1170,6 +1170,83 @@ class RentalKey(unittest.TestCase):
         self.assertEqual(args[3], "create")
 
 
+class Watchdog(unittest.TestCase):
+    """An interruptible machine can be gone between two ticks."""
+
+    class Args:
+        vram, cap, no_bid, yes, attempts = 48, 2.0, False, True, 3
+        context, model, no_ssh, task, analyze = 8192, "m", False, False, True
+        url, project, slots = "http://x/y.gguf", "/tmp/p", 8
+
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+        for name, value in (("VAST_DIR", self.dir.name),
+                            ("LOGFILE", os.path.join(self.dir.name, "o.log")),
+                            ("STATE_FILE",
+                             os.path.join(self.dir.name, "state.json"))):
+            p = mock.patch.object(vo, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_nothing_rented_leads_to_a_rental_and_a_worker(self):
+        def fake_rent(a):
+            vo.state_write({"endpoint": "http://1.2.3.4:8080"})
+            return 0
+
+        with mock.patch.object(vo, "running_instance", return_value=None), \
+             mock.patch.object(vo, "rent", side_effect=fake_rent), \
+             mock.patch.object(vo, "start_worker", return_value=True) as w, \
+             mock.patch.object(vo, "report"):
+            self.assertEqual(vo.watch(self.Args()), 0)
+        w.assert_called_once_with("http://1.2.3.4:8080")
+
+    def test_a_silent_instance_is_thrown_away(self):
+        with mock.patch.object(vo, "running_instance",
+                               return_value=instance(id_=7)), \
+             mock.patch.object(vo, "healthy", return_value=False), \
+             mock.patch.object(vo, "destroy") as d, \
+             mock.patch.object(vo, "registry_upsert") as reg, \
+             mock.patch.object(vo, "report"):
+            self.assertEqual(vo.watch(self.Args()), 1)
+        d.assert_called_once_with(7)
+        # and it is deregistered, so nobody sends work to a dead address
+        self.assertFalse(reg.call_args.kwargs["active"])
+
+    def test_a_healthy_instance_restarts_only_a_missing_worker(self):
+        with mock.patch.object(vo, "running_instance",
+                               return_value=instance(id_=7)), \
+             mock.patch.object(vo, "healthy", return_value=True), \
+             mock.patch.object(vo, "worker_running", return_value=False), \
+             mock.patch.object(vo, "start_worker", return_value=True) as w, \
+             mock.patch.object(vo, "run_once", return_value=0), \
+             mock.patch.object(vo, "report"):
+            self.assertEqual(vo.watch(self.Args()), 0)
+        w.assert_called_once_with("http://203.0.113.7:41234")
+
+    def test_a_running_worker_is_left_alone(self):
+        with mock.patch.object(vo, "running_instance",
+                               return_value=instance(id_=7)), \
+             mock.patch.object(vo, "healthy", return_value=True), \
+             mock.patch.object(vo, "worker_running", return_value=True), \
+             mock.patch.object(vo, "start_worker") as w, \
+             mock.patch.object(vo, "run_once", return_value=0), \
+             mock.patch.object(vo, "report"):
+            vo.watch(self.Args())
+        w.assert_not_called()
+
+    def test_the_worker_gets_the_current_endpoint(self):
+        with mock.patch("subprocess.run",
+                        return_value=mock.Mock(returncode=0, stdout="started",
+                                               stderr="")) as r, \
+             mock.patch.object(vo, "report"):
+            self.assertTrue(vo.start_worker("http://5.6.7.8:9999"))
+        befehl = r.call_args[0][0][-1]
+        self.assertIn("http://5.6.7.8:9999/v1/chat/completions", befehl)
+        # an old run against a dead machine would only pile up errors
+        self.assertIn("pkill -f", befehl)
+
+
 class Registry(unittest.TestCase):
     """The llm_models entry is the interface to the rest of the house - but it
     must never matter more than the running instance."""

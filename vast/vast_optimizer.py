@@ -141,6 +141,16 @@ DOWNLOAD_LOG = "/root/download.log"
 BUILD_DRIVER = "/home/gh/bau_treiber.sh"
 RENT_PROJECT = "/home/gh/vast_optimizer_miet"
 
+# The work the rented GPU is for: 256k unanalysed posts in wagodb.nitter_content
+# on heissa.de. The analyzer runs there, the model runs on the rented machine,
+# so the endpoint has to be pushed over whenever it changes - an interruptible
+# instance can be gone at any moment.
+WORKER_HOST = "gh@heissa.de"
+WORKER_CMD = ("setsid nohup python3 /home/gh/python/content_analyzer.py "
+              "--llm-url {endpoint}/v1/chat/completions --workers 16 "
+              "> /home/gh/python/analyzer_gpu.log 2>&1 < /dev/null &")
+WORKER_CHECK = "pgrep -f 'content_analyzer.py --llm-url' | head -1"
+
 
 # ------------------------------------------------------------- outside world
 
@@ -1429,6 +1439,76 @@ def rent(a) -> int:
     return 1
 
 
+def worker_running() -> bool:
+    """Is the analyzer working on heissa.de?"""
+    try:
+        e = subprocess.run(["ssh", "-n", "-o", "ConnectTimeout=15",
+                            "-o", "BatchMode=yes", WORKER_HOST, WORKER_CHECK],
+                           capture_output=True, text=True, timeout=45)
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    return (e.stdout or "").strip().isdigit()
+
+
+def start_worker(endpoint: str) -> bool:
+    """Points the analyzer at the current endpoint and starts it. An old run
+    against a dead machine is stopped first - it would only pile up errors."""
+    befehl = ("pkill -f 'content_analyzer.py --llm-url'; sleep 2; "
+              + WORKER_CMD.format(endpoint=endpoint) + " echo started")
+    try:
+        e = subprocess.run(["ssh", "-n", "-o", "ConnectTimeout=15",
+                            "-o", "BatchMode=yes", WORKER_HOST, befehl],
+                           capture_output=True, text=True, timeout=60)
+    except (subprocess.TimeoutExpired, OSError) as ex:
+        report(f"  analyzer could not be started: {str(ex)[:120]}")
+        return False
+    ok = e.returncode == 0
+    report(f"  analyzer {'started' if ok else 'refused'} on {WORKER_HOST} "
+           f"against {endpoint}")
+    return ok
+
+
+def watch(a) -> int:
+    """One tick of the watchdog, meant for cron.
+
+    Three cases, in this order: nothing rented -> rent and put the analyzer
+    to work; rented but not answering -> throw it away, the next tick rents
+    again; rented and healthy -> look whether somebody sells the same thing
+    more than 11 % cheaper, and keep the analyzer running.
+
+    An interruptible instance can disappear between two ticks, which is
+    exactly why this exists."""
+    st = state_read()
+    live = running_instance()
+    if not live:
+        report("watch: nothing rented")
+        if not a.yes:
+            report("  (without --yes nothing is rented)")
+            return 0
+        rc = rent(a)
+        if rc == 0 and a.analyze:
+            endpoint_now = state_read().get("endpoint")
+            if endpoint_now:
+                start_worker(endpoint_now)
+        return rc
+    address = endpoint(live)
+    if not address or not healthy(address):
+        report(f"watch: instance {live['id']} does not answer - destroying it")
+        destroy(live["id"])
+        registry_upsert(None, {"num_gpus": live.get("num_gpus"),
+                               "gpu_name": live.get("gpu_name"),
+                               "gpu_ram": live.get("gpu_ram"),
+                               "dph_total": live.get("dph_total")},
+                        live["id"], active=False)
+        return 1
+    report(f"watch: {live['id']} healthy at {address}, "
+           f"{float(live.get('dph_total') or 0):.3f} $/h")
+    if a.analyze and not worker_running():
+        report("  analyzer is not running")
+        start_worker(address)
+    return run_once(a, for_real=a.yes)
+
+
 # ------------------------------------------------------------------- commands
 
 def show_status(a) -> None:
@@ -1475,7 +1555,7 @@ def run_once(a, for_real: bool) -> int:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     p.add_argument("command", nargs="?", default="check",
-                   choices=["check", "run", "status", "rent"])
+                   choices=["check", "run", "status", "rent", "watch"])
     p.add_argument("--vram", type=float, default=TARGET_VRAM,
                    help="target VRAM in GB in total (48 may also be 2x24)")
     p.add_argument("--cap", type=float, default=PRICE_CAP,
@@ -1488,6 +1568,9 @@ def main() -> int:
                    help="rent: actually rent, this costs money from the start")
     p.add_argument("--task", action="store_true",
                    help="rent: hand the rented machine the build task at once")
+    p.add_argument("--analyze", action="store_true",
+                   help="watch: keep the post analyzer on heissa.de pointed at "
+                        "the current endpoint")
     p.add_argument("--project", default=RENT_PROJECT,
                    help="directory the rented machine builds in")
     p.add_argument("--no-ssh", action="store_true",
@@ -1506,6 +1589,8 @@ def main() -> int:
         return 0
     if a.command == "rent":
         return rent(a)
+    if a.command == "watch":
+        return watch(a)
     return run_once(a, for_real=(a.command == "run"))
 
 
