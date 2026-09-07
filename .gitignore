@@ -9,3 +9,4 @@ __pycache__/
 *.pyc
 *.bak
 batch/config_local.py
+.claude/settings.local.json
